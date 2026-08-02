@@ -1,0 +1,124 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://winrouter.local/schema/config-v1.json",
+  "title": "WinRouter configuration v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "mode", "tun", "interface_a", "interface_b", "direct_prefixes", "domestic", "dns", "ipv6"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "mode": { "enum": ["direct-split", "proxy-split"] },
+    "tun": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["prefix", "stack"],
+      "properties": {
+        "prefix": { "type": "string" },
+        "stack": { "enum": ["system", "gvisor", "mixed"] }
+      }
+    },
+    "interface_a": { "$ref": "#/$defs/interface" },
+    "interface_b": { "$ref": "#/$defs/interface" },
+    "direct_prefixes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["prefix", "bind_interface"],
+        "properties": {
+          "prefix": { "type": "string" },
+          "bind_interface": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "custom_rules": {
+      "type": "array",
+      "maxItems": 200,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "type", "value", "action"],
+        "properties": {
+          "name": { "type": "string", "minLength": 1, "maxLength": 80 },
+          "type": { "enum": ["domain", "ip", "process-name", "process-path"] },
+          "value": { "type": "string", "minLength": 1 },
+          "action": { "enum": ["a", "b", "final", "reject"] }
+        }
+      }
+    },
+    "rule_sets": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["tag", "kind", "action", "path"],
+        "properties": {
+          "tag": { "type": "string", "minLength": 1 },
+          "kind": { "enum": ["domain", "ip"] },
+          "action": { "enum": ["a", "b", "final", "reject"] },
+          "path": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "domestic": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["cidrs", "domain_suffixes"],
+      "properties": {
+        "cidrs": { "type": "array", "items": { "type": "string" } },
+        "domain_suffixes": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "dns": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["domestic", "global"],
+      "properties": {
+        "domestic": { "$ref": "#/$defs/dns" },
+        "global": { "$ref": "#/$defs/dns" }
+      }
+    },
+    "proxy": { "$ref": "#/$defs/proxy" },
+    "ipv6": { "const": "block" }
+  },
+  "allOf": [{
+    "if": { "properties": { "mode": { "const": "proxy-split" } } },
+    "then": { "required": ["proxy"] },
+    "else": { "not": { "required": ["proxy"] } }
+  }],
+  "$defs": {
+    "interface": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["guid", "bind_interface"],
+      "properties": {
+        "guid": { "type": "string", "minLength": 1 },
+        "bind_interface": { "type": "string", "minLength": 1 }
+      }
+    },
+    "dns": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "server", "port"],
+      "properties": {
+        "type": { "enum": ["udp", "tls", "https"] },
+        "server": { "type": "string" },
+        "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+        "server_name": { "type": "string" }
+      }
+    },
+    "proxy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "server", "port"],
+      "properties": {
+        "type": { "enum": ["http", "shadowsocks"] },
+        "server": { "type": "string", "minLength": 1 },
+        "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+        "method": { "type": "string" },
+        "username": { "type": "string" },
+        "password": { "type": "string" }
+      }
+    }
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "rules": [
+    { "kind": "private", "outbound": "direct-by-interface" },
+    { "kind": "domestic", "outbound": "direct-a" },
+    { "kind": "final", "outbound": "direct-b" }
+  ]
+}

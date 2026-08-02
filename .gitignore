@@ -1,0 +1,64 @@
+# Editors and operating-system files
+.DS_Store
+Thumbs.db
+Desktop.ini
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+*.local
+*.key
+*.pem
+*.pfx
+*.p12
+
+# Go build and test output
+/.gocache/
+/bin/
+*.test
+*.out
+coverage*.txt
+coverage*.html
+*.prof
+*.trace
+
+# Node/Vite output and local caches
+/.npm-cache/
+/frontend/node_modules/
+/frontend/node_modules.locked-*/
+/frontend/dist/
+/frontend/.vite/
+/frontend/package.json.md5
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Wails output and local validation evidence
+/build/bin/
+/build/crash-test-bin/
+/build/metadata/
+/build/release/
+/build/phase*/
+/build/*.log
+/build/phase2-monitor-*.png
+
+# Locally supplied third-party core binaries. Keep manifest and license tracked.
+/resources/core/*.exe
+/resources/core/*.dll
+
+# Captures, diagnostics, and temporary files
+*.etl
+*.pcap
+*.pcapng
+*.tmp
+*.temp
+*.bak
+*.old
+*.zip
