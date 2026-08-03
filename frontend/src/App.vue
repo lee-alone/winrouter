@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
-import { AddProxyNode, AddSubscription, ApplyCoreConfiguration, ApplySelectedProxyConfiguration, ConfigureRemoteRuleSet, ConfigureSRSSource, DeleteProxyNode, DeleteSRSSource, DeleteSubscription, ExportDiagnosticBundle, GetAutostartStatus, GetCoreStatus, GetDNSPresets, GetDNSSettings, GetInterfaceSnapshot, GetObservations, GetRecoveryStatus, GetRemoteRuleSet, GetSRSPresets, GetStatus, GetTrafficBudgetStatus, InspectProcessRules, ListProxyNodes, ListSRSSources, ListSubscriptions, PreviewCoreRules, PreviewDiagnosticBundle, RecordApplicationLog, RefreshRemoteRuleSet, RefreshSRSSource, RefreshSubscription, ResetTrafficBudget, RunHealthProbe, SelectInterfaces, SelectProxyNode, SetAutostartEnabled, SetDNSSettings, SetProxyNodeFavorite, SetTrafficBudget, SpeedTestProxyNodes, StopCore, TestProxyNode, UpdateProxyNode, UpdateSubscription, ValidateCoreConfiguration, ValidateSelectedProxyConfiguration } from '../wailsjs/go/main/App'
+import { AddProxyNode, AddSubscription, ApplyCoreConfiguration, ApplySelectedProxyConfiguration, ConfigureRemoteRuleSet, ConfigureSRSSource, DeleteProxyNode, DeleteSRSSource, DeleteSubscription, ExportDiagnosticBundle, GetAutostartStatus, GetCoreStatus, GetDNSPresets, GetDNSSettings, GetInterfaceSnapshot, GetIPv6Policy, GetObservations, GetRecoveryStatus, GetRemoteRuleSet, GetSRSPresets, GetStatus, GetTrafficBudgetStatus, InspectProcessRules, ListProxyNodes, ListSRSSources, ListSubscriptions, PreviewCoreRules, PreviewDiagnosticBundle, RecordApplicationLog, RefreshRemoteRuleSet, RefreshSRSSource, RefreshSubscription, ResetTrafficBudget, RunHealthProbe, SelectInterfaces, SelectProxyNode, SetAutostartEnabled, SetDNSSettings, SetIPv6Policy, SetProxyNodeFavorite, SetTrafficBudget, SpeedTestProxyNodes, StopCore, TestDNSServer, TestProxyNode, UpdateProxyNode, UpdateSubscription, ValidateCoreConfiguration, ValidateSelectedProxyConfiguration } from '../wailsjs/go/main/App'
 import type { config, core, interfacemanager, interfaces, nodes, observability, processrules, rulesets, srssets, subscriptions } from '../wailsjs/go/models'
 import { EventsOn } from '../wailsjs/runtime/runtime'
 import type { ApplicationStatus } from './vite-env'
@@ -33,6 +33,11 @@ type TrafficBudgetStatus = { enabled: boolean; budget_gb: number; warning_percen
 type DNSServer = { preset_id?: string; type: 'udp' | 'tls' | 'https'; server: string; port: number; server_name?: string }
 type DNSSettings = { schema_version: number; domestic: DNSServer; global: DNSServer }
 type DNSPreset = DNSServer & { id: string; name: string; scope: 'domestic' | 'global' }
+type DNSTestState = 'idle' | 'testing' | 'success' | 'failed'
+function normalizeDNSSettings(value: DNSSettings): DNSSettings {
+  const normalizeServer = (server: DNSServer): DNSServer => ({ ...server, preset_id: server.preset_id ?? '', server_name: server.server_name ?? '' })
+  return { ...value, domestic: normalizeServer(value.domestic), global: normalizeServer(value.global) }
+}
 const emptyTrafficBudget: TrafficBudgetStatus = { enabled: false, budget_gb: 100, warning_percent: 80, period: '', used_bytes: 0, budget_bytes: 0, used_percent: 0, warning_reached: false, limit_reached: false }
 const observations = ref<{ probes: observability.ProbeResult[]; counters: observability.InterfaceCounter[]; rule_sets: observability.RuleSetMetadata[]; connections: ConnectionSummary; rule_hits: RuleHit[]; traffic_budget: TrafficBudgetStatus }>({ probes: [], counters: [], rule_sets: [], connections: { active_tcp: 0, established_tcp: 0, listening_tcp: 0, udp_endpoints: 0 }, rule_hits: [], traffic_budget: emptyTrafficBudget })
 const traffic = ref<TrafficPoint[]>([])
@@ -50,6 +55,10 @@ const budgetForm = ref({ enabled: false, budget_gb: 100, warning_percent: 80 })
 const dnsSettings = ref<DNSSettings>({ schema_version: 1, domestic: { preset_id: 'aliyun-udp', type: 'udp', server: '223.5.5.5', port: 53 }, global: { preset_id: 'google-udp', type: 'udp', server: '8.8.8.8', port: 53 } })
 const dnsPresets = ref<DNSPreset[]>([])
 const dnsBusy = ref(false)
+const dnsTests = ref<Record<'domestic' | 'global', DNSTestState>>({ domestic: 'idle', global: 'idle' })
+const observationsError = ref('')
+const ipv6Policy = ref<'block' | 'split'>('block')
+const ipv6Busy = ref(false)
 const proxyNodes = ref<nodes.Node[]>([])
 const proxyFormOpen = ref(false)
 const proxyForm = ref({ id: '', name: '', type: 'http', server: '', port: 8080, username: '', password: '', clear_password: false })
@@ -98,7 +107,7 @@ const selectionValid = computed(() => Boolean(selectedA.value && selectedB.value
 const isRunning = computed(() => coreStatus.value.state === 'running')
 const isRecovering = computed(() => ['stopping', 'waiting-for-network', 'recovering'].includes(recoveryStatus.value.state))
 const filteredLogs = computed(() => logFilter.value === 'all' ? logs.value : logs.value.filter(entry => entry.level === logFilter.value))
-const directPrefixes = computed(() => (snapshot.value?.topology.prefixes ?? []).filter(prefix => prefix.action === 'bind-interface' && !prefix.prefix.includes(':') && (prefix.adapter_guid === selectedA.value || prefix.adapter_guid === selectedB.value)))
+const directPrefixes = computed(() => (snapshot.value?.topology.prefixes ?? []).filter(prefix => prefix.action === 'bind-interface' && (ipv6Policy.value === 'split' || !prefix.prefix.includes(':')) && !prefix.prefix.startsWith('fe80:') && (prefix.adapter_guid === selectedA.value || prefix.adapter_guid === selectedB.value)))
 const blockingDiagnostics = computed(() => (snapshot.value?.diagnostics ?? []).filter(item => item.severity === 'error'))
 const selectedProxyNode = computed(() => proxyNodes.value.find(node => node.selected))
 const sortedProxyNodes = computed(() => [...proxyNodes.value].sort((first, second) => {
@@ -221,13 +230,26 @@ async function deleteSRSSource(source: srssets.Source) {
   catch (reason) { error.value = `无法删除 SRS 来源：${messageOf(reason)}` }
 }
 
+function observationCount(value: unknown): number {
+  const count = Number(value)
+  return Number.isFinite(count) && count >= 0 ? Math.floor(count) : 0
+}
+
 function normalizeObservations(value?: Partial<typeof observations.value>) {
+  const rawConnections = (value?.connections ?? {}) as Partial<ConnectionSummary>
+  const rawHits = Array.isArray(value?.rule_hits) ? value.rule_hits : []
   return {
     probes: value?.probes ?? [],
     counters: value?.counters ?? [],
     rule_sets: value?.rule_sets ?? [],
-    connections: value?.connections ?? { active_tcp: 0, established_tcp: 0, listening_tcp: 0, udp_endpoints: 0 },
-    rule_hits: value?.rule_hits ?? [],
+    connections: {
+      active_tcp: observationCount(rawConnections.active_tcp),
+      established_tcp: observationCount(rawConnections.established_tcp),
+      listening_tcp: observationCount(rawConnections.listening_tcp),
+      udp_endpoints: observationCount(rawConnections.udp_endpoints),
+      sampled_at: rawConnections.sampled_at,
+    },
+    rule_hits: rawHits.map(item => ({ outbound: String(item?.outbound ?? ''), count: observationCount(item?.count) })),
     traffic_budget: value?.traffic_budget ?? emptyTrafficBudget,
   }
 }
@@ -271,8 +293,12 @@ async function refreshObservations() {
   try {
     const next = normalizeObservations(await GetObservations())
     observations.value = next
+    observationsError.value = ''
     sampleTraffic(next.counters)
-  } catch (reason) { addLog('warning', `无法读取诊断数据：${messageOf(reason)}`) }
+  } catch (reason) {
+    observationsError.value = messageOf(reason)
+    addLog('warning', `无法读取诊断数据：${observationsError.value}`)
+  }
 }
 
 async function runProbe() {
@@ -519,7 +545,7 @@ function buildConfig(): config.MVPConfig {
     domestic: { cidrs: [], domain_suffixes: [] },
     dns: { domestic: { ...dnsSettings.value.domestic }, global: { ...dnsSettings.value.global } },
     ...(selectedMode.value === 'proxy-split' ? { proxy: { type: 'http', server: '0.0.0.0', port: 1 } } : {}),
-    ipv6: 'block',
+    ipv6: ipv6Policy.value,
   } as unknown as config.MVPConfig
 }
 
@@ -606,16 +632,30 @@ function chooseDNSPreset(scope: 'domestic' | 'global') {
   if (!target.preset_id) return
   const preset = dnsPresets.value.find(item => item.id === target.preset_id && item.scope === scope)
   if (preset) dnsSettings.value[scope] = { preset_id: preset.id, type: preset.type, server: preset.server, port: preset.port, server_name: preset.server_name || '' }
+  dnsTests.value[scope] = 'idle'
 }
-function setCustomDNS(scope: 'domestic' | 'global') { dnsSettings.value[scope].preset_id = '' }
+function setCustomDNS(scope: 'domestic' | 'global') { dnsSettings.value[scope].preset_id = ''; dnsTests.value[scope] = 'idle' }
+async function testDNSServer(scope: 'domestic' | 'global') {
+  dnsTests.value[scope] = 'testing'
+  try {
+    const result = await TestDNSServer({ ...dnsSettings.value[scope] } as any) as { success: boolean }
+    dnsTests.value[scope] = result.success ? 'success' : 'failed'
+  } catch { dnsTests.value[scope] = 'failed' }
+}
 async function saveDNSSettings() {
   dnsBusy.value = true; error.value = ''; notice.value = ''
   try {
-    dnsSettings.value = await SetDNSSettings(dnsSettings.value as any) as DNSSettings
+    dnsSettings.value = normalizeDNSSettings(await SetDNSSettings(dnsSettings.value as any) as DNSSettings)
     notice.value = 'DNS 设置已保存，将用于预览、启动和网络恢复。'
     await refreshRulePreview()
   } catch (reason) { error.value = `无法保存 DNS 设置：${messageOf(reason)}` }
   finally { dnsBusy.value = false }
+}
+async function saveIPv6Policy() {
+  ipv6Busy.value = true; error.value = ''; notice.value = ''
+  try { const next = await SetIPv6Policy(ipv6Policy.value); syncSelection(next); notice.value = ipv6Policy.value === 'split' ? (next.diagnostics.some(item => item.severity === 'error') ? 'IPv6 分流设置已保存，但当前网络未通过 IPv6 预检。' : 'IPv6 分流已启用并完成预检。') : 'IPv6 分流已关闭，IPv6 流量将被阻止。'; await refreshRulePreview() }
+  catch (reason) { error.value = `无法更新 IPv6 策略：${messageOf(reason)}` }
+  finally { ipv6Busy.value = false }
 }
 function trafficHeight(value: number, role: 'A' | 'B') {
   const maximum = role === 'A' ? maxTrafficRateA.value : maxTrafficRateB.value
@@ -632,17 +672,19 @@ onMounted(async () => {
     if (Array.isArray(stored)) customRules.value = stored.slice(0, 200)
   } catch { localStorage.removeItem('winrouter.customRules.v1') }
   try {
-    const [appStatus, interfaceSnapshot, status, recovery, observed, autostart, budget, storedDNS, presets] = await Promise.all([GetStatus(), GetInterfaceSnapshot(), GetCoreStatus(), GetRecoveryStatus(), GetObservations(), GetAutostartStatus(), GetTrafficBudgetStatus(), GetDNSSettings(), GetDNSPresets()])
+    const [appStatus, interfaceSnapshot, status, recovery, observed, autostart, budget, storedDNS, presets, storedIPv6] = await Promise.all([GetStatus(), GetInterfaceSnapshot(), GetCoreStatus(), GetRecoveryStatus(), GetObservations(), GetAutostartStatus(), GetTrafficBudgetStatus(), GetDNSSettings(), GetDNSPresets(), GetIPv6Policy()])
     app.value = appStatus
     syncSelection(interfaceSnapshot)
     coreStatus.value = status
     recoveryStatus.value = recovery as RecoveryStatus
     observations.value = normalizeObservations(observed)
+    observationsError.value = ''
     sampleTraffic(observations.value.counters)
     autostartEnabled.value = autostart.enabled
     budgetForm.value = { enabled: budget.enabled, budget_gb: budget.budget_gb, warning_percent: budget.warning_percent }
-    dnsSettings.value = storedDNS as DNSSettings
+    dnsSettings.value = normalizeDNSSettings(storedDNS as DNSSettings)
     dnsPresets.value = presets as DNSPreset[]
+    ipv6Policy.value = storedIPv6 as 'block' | 'split'
     proxyNodes.value = await ListProxyNodes()
     subscriptionList.value = await ListSubscriptions()
     remoteRuleSet.value = await GetRemoteRuleSet()
@@ -746,6 +788,7 @@ onBeforeUnmount(() => {
           <div><span>{{ t('monitor.hitA') }}</span><strong>{{ ruleHitA }}</strong><small>{{ t('monitor.logWindow') }}</small></div>
           <div><span>{{ t('monitor.hitB') }}</span><strong>{{ ruleHitB }}</strong><small>{{ t('monitor.logWindow') }}</small></div>
         </section>
+        <p v-if="observationsError" class="observation-error">监控采样失败：{{ observationsError }}。当前显示上一次可用数据。</p>
         <section v-if="observations.traffic_budget.enabled" :class="['budget-status', { warning: observations.traffic_budget.warning_reached }]" aria-live="polite">
           <div><p class="section-kicker">{{ t('monitor.budget') }}</p><h2>{{ formatBytes(observations.traffic_budget.used_bytes) }} / {{ observations.traffic_budget.budget_gb }} GB</h2><p>{{ t('monitor.budgetScope') }}</p></div>
           <strong>{{ observations.traffic_budget.used_percent.toFixed(1) }}%</strong>
@@ -951,11 +994,13 @@ onBeforeUnmount(() => {
                 <label>服务器 IP<input v-model.trim="dnsSettings[scope].server" required :readonly="Boolean(dnsSettings[scope].preset_id)" placeholder="1.1.1.1" @input="setCustomDNS(scope)"></label>
                 <label>端口<input v-model.number="dnsSettings[scope].port" type="number" min="1" max="65535" required :readonly="Boolean(dnsSettings[scope].preset_id)" @input="setCustomDNS(scope)"></label>
                 <label :class="{ 'dns-field-placeholder': dnsSettings[scope].type === 'udp' }">TLS 域名<input v-model.trim="dnsSettings[scope].server_name" :required="dnsSettings[scope].type !== 'udp'" :disabled="dnsSettings[scope].type === 'udp'" :readonly="Boolean(dnsSettings[scope].preset_id)" :placeholder="dnsSettings[scope].type === 'udp' ? 'UDP 不需要' : 'dns.example.com'" @input="setCustomDNS(scope)"></label>
+                <button type="button" class="dns-test" :class="dnsTests[scope]" :disabled="dnsTests[scope] === 'testing' || dnsBusy" @click="testDNSServer(scope)">{{ dnsTests[scope] === 'testing' ? '测试中' : dnsTests[scope] === 'success' ? '成功' : dnsTests[scope] === 'failed' ? '失败' : '测试' }}</button>
               </div>
               <div class="dns-actions"><button type="button" class="primary" :disabled="dnsBusy || isRunning" @click="saveDNSSettings">{{ dnsBusy ? '正在校验' : '保存 DNS' }}</button></div>
             </div>
           </div>
         </section>
+        <section class="settings-list" aria-label="IPv6 分流设置"><div class="setting-row"><div><h2>IPv6 分流</h2><p>关闭时拒绝 AAAA 查询和 IPv6 流量；开启前必须通过两个出口的 IPv6 地址、默认路由与前缀重叠预检。</p></div><div class="budget-controls"><label class="toggle"><input v-model="ipv6Policy" type="checkbox" true-value="split" false-value="block" :disabled="ipv6Busy || isRunning"><span>{{ ipv6Policy === 'split' ? '已启用' : '已关闭' }}</span></label><button type="button" class="primary" :disabled="ipv6Busy || isRunning" @click="saveIPv6Policy">{{ ipv6Busy ? '正在预检' : '保存 IPv6 策略' }}</button></div></div></section>
         <section class="settings-list" :aria-label="t('settings.language')">
           <div class="setting-row">
             <div><h2>{{ t('settings.language') }}</h2><p>{{ t('settings.languageDetail') }}</p></div>

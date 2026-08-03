@@ -5,6 +5,7 @@ const (
 	ModeDirectSplit = "direct-split"
 	ModeProxySplit  = "proxy-split"
 	IPv6Block       = "block"
+	IPv6Split       = "split"
 )
 
 type MVPConfig struct {

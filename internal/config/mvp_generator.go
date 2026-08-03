@@ -77,8 +77,8 @@ func ValidateMVPModel(input MVPConfig) error {
 	if input.TUN.Stack != TUNStackSystem && input.TUN.Stack != TUNStackGVisor && input.TUN.Stack != TUNStackMixed {
 		return fmt.Errorf("unsupported TUN stack %q", input.TUN.Stack)
 	}
-	if input.IPv6 != IPv6Block {
-		return fmt.Errorf("unsupported IPv6 policy %q: Phase 1 requires %q", input.IPv6, IPv6Block)
+	if input.IPv6 != IPv6Block && input.IPv6 != IPv6Split {
+		return fmt.Errorf("unsupported IPv6 policy %q", input.IPv6)
 	}
 	if err := validateDNSServer("domestic", input.DNS.Domestic); err != nil {
 		return err
@@ -103,8 +103,8 @@ func ValidateMVPModel(input MVPConfig) error {
 			return fmt.Errorf("direct prefix %q requires bind_interface", direct.Prefix)
 		}
 		prefix, err := netip.ParsePrefix(direct.Prefix)
-		if err != nil || !prefix.Addr().Is4() {
-			return fmt.Errorf("direct prefix %q must be IPv4 while IPv6 policy is block", direct.Prefix)
+		if err != nil || (input.IPv6 == IPv6Block && !prefix.Addr().Is4()) {
+			return fmt.Errorf("direct prefix %q is not allowed by IPv6 policy %q", direct.Prefix, input.IPv6)
 		}
 	}
 	if len(input.CustomRules) > 200 {
@@ -230,14 +230,17 @@ func GenerateMVP(input MVPConfig) (Generated, error) {
 		DNSUpstreamA: input.DNS.Domestic.Server, DNSUpstreamB: input.DNS.Global.Server,
 		InfrastructureB: infrastructureB,
 		DirectPrefixes:  policyPrefixes, DomesticCIDRs: input.Domestic.CIDRs,
-		DomesticDomains: input.Domestic.DomainSuffixes, BlockIPv6: true,
+		DomesticDomains: input.Domestic.DomainSuffixes, BlockIPv6: input.IPv6 == IPv6Block,
 		CustomRules: customRules,
 	})
 	if err != nil {
 		return Generated{}, err
 	}
 	interfacePrefix := netip.MustParsePrefix(input.TUN.Prefix)
-	dnsRules := []DNSRule{{QueryType: []string{"AAAA"}, Action: "reject"}}
+	dnsRules := make([]DNSRule, 0)
+	if input.IPv6 == IPv6Block {
+		dnsRules = append(dnsRules, DNSRule{QueryType: []string{"AAAA"}, Action: "reject"})
+	}
 	if domains := normalizedDomainCopy(input.Domestic.DomainSuffixes); len(domains) > 0 {
 		dnsRules = append(dnsRules, DNSRule{DomainSuffix: domains, Action: "route", Server: "dns-domestic"})
 	}
@@ -255,7 +258,7 @@ func GenerateMVP(input MVPConfig) (Generated, error) {
 		DNS: DNSConfig{
 			Servers: []DNSServer{dnsServer("dns-domestic", input.DNS.Domestic, "domestic-direct"), dnsServer("dns-global", input.DNS.Global, "foreign-direct")},
 			Rules:   dnsRules,
-			Final:   "dns-global", Strategy: "ipv4_only", IndependentCache: true,
+			Final:   "dns-global", Strategy: dnsStrategy(input.IPv6), IndependentCache: true,
 		},
 		Inbounds:  []TUNInbound{{Type: "tun", Tag: "tun-in", InterfaceName: "WinRouter-TUN", Address: []string{netip.PrefixFrom(interfacePrefix.Addr().Next(), 30).String(), "fdfe:dcba:9876::1/126"}, AutoRoute: true, StrictRoute: true, Stack: input.TUN.Stack}},
 		Outbounds: outbounds,
@@ -293,6 +296,13 @@ func GenerateMVP(input MVPConfig) (Generated, error) {
 		return Generated{}, err
 	}
 	return generated, nil
+}
+
+func dnsStrategy(ipv6Policy string) string {
+	if ipv6Policy == IPv6Split {
+		return "prefer_ipv4"
+	}
+	return "ipv4_only"
 }
 
 func PreviewMVPRules(input MVPConfig) ([]RulePreview, error) {

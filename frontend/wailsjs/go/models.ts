@@ -374,6 +374,22 @@ export namespace dnssettings {
 		    return a;
 		}
 	}
+	export class TestResult {
+	    success: boolean;
+	    duration_ms: number;
+	    error?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new TestResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.success = source["success"];
+	        this.duration_ms = source["duration_ms"];
+	        this.error = source["error"];
+	    }
+	}
 
 }
 

@@ -11,7 +11,8 @@
 进入核心模型前必须解析为固定 IPv4 和端口；
 生成器唯一设置 `route.final = proxy`，代理 outbound 显式绑定网卡 B。缺少或
 无效节点时拒绝生成配置，不回退到网卡 B 直连。A/B 必须具有不同 GUID 和
-`bind_interface`；DNS 上游必须是固定 IP，MVP IPv6 策略唯一允许值为 `block`。
+`bind_interface`；DNS 上游必须是固定 IP。IPv6 分流默认 `block`；用户可切换为
+`split`，但只有两个出口均具备 IPv6 地址、IPv6 默认路由且前缀不重叠时才可启动。
 
 节点可使用固定 IPv4 或 DNS 名称。DNS 名称通过配置中的固定全局 UDP DNS，
 以网卡 B 的 IPv4 为源地址解析；新地址通过 CONNECT 健康检查后才原子提交。
@@ -41,7 +42,7 @@ SHA-256。更新仅在下载大小、哈希和结构全部验证后提交；失�
 5. 用户域名/IP 规则，保持域名/IP 规则之间的用户顺序；
 6. InterfaceManager 提供的直连前缀按所属接口绑定；
 7. 未被直连前缀覆盖的私有、链路本地、保留和测试地址拒绝；
-8. IPv6 拒绝；
+8. IPv6 策略为 `block` 时拒绝 IPv6；为 `split` 时按 IPv6 直连前缀和最终出口分流；
 9. 国内域名和公网 CIDR 使用 `domestic-direct`；
 10. `route.final` 使用当前模式唯一允许的最终出口。
 
@@ -52,8 +53,9 @@ SHA-256。更新仅在下载大小、哈希和结构全部验证后提交；失�
 
 国内 DNS detour 为 `domestic-direct`，全球 DNS detour 为
 `foreign-direct`。`independent_cache` 始终启用，最终 DNS 为
-`dns-global`，国内域名规则选择 `dns-domestic`。AAAA 查询规则首先拒绝，
-TUN 同时配置 IPv6 地址并在路由层拒绝所有 IPv6，避免系统流量绕过。
+`dns-global`，国内域名规则选择 `dns-domestic`。`block` 时 AAAA 查询首先拒绝，
+TUN 在路由层拒绝所有 IPv6，避免系统流量绕过。`split` 时保留 AAAA 响应，并要求
+两个选定出口具备独立且不重叠的 IPv6 前缀。
 
 UDP、DoT 和 DoH 可作为上游类型；DoT/DoH 要求固定 IP、端口和 TLS
 `server_name`，DoH 路径固定为 `/dns-query`。

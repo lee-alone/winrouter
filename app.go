@@ -614,6 +614,33 @@ func (a *App) SelectInterfaces(interfaceAGUID, interfaceBGUID string) (interface
 	return manager.Select(interfaceA, interfaceB)
 }
 
+func (a *App) GetIPv6Policy() (string, error) {
+	manager, err := a.getInterfaceManager()
+	if err != nil {
+		return "", err
+	}
+	return manager.IPv6Policy(), nil
+}
+
+func (a *App) SetIPv6Policy(policy string) (interfacemanager.Snapshot, error) {
+	status, err := a.GetCoreStatus()
+	if err != nil {
+		return interfacemanager.Snapshot{}, err
+	}
+	if status.State == "running" {
+		return interfacemanager.Snapshot{}, errors.New("stop routing before changing the IPv6 policy")
+	}
+	manager, err := a.getInterfaceManager()
+	if err != nil {
+		return interfacemanager.Snapshot{}, err
+	}
+	snapshot, err := manager.SetIPv6Policy(policy)
+	if err == nil {
+		a.observations.Log(observability.LevelInfo, "interfaces", "IPv6 policy updated", "", map[string]any{"policy": policy})
+	}
+	return snapshot, err
+}
+
 func (a *App) getInterfaceManager() (*interfacemanager.Manager, error) {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
@@ -1093,6 +1120,10 @@ func (a *App) GetDNSSettings() (dnssettings.Settings, error) {
 }
 
 func (a *App) GetDNSPresets() []dnssettings.Preset { return dnssettings.Presets() }
+
+func (a *App) TestDNSServer(server dnssettings.Server) dnssettings.TestResult {
+	return dnssettings.Test(context.Background(), server)
+}
 
 func (a *App) SetDNSSettings(settings dnssettings.Settings) (dnssettings.Settings, error) {
 	a.mu.RLock()

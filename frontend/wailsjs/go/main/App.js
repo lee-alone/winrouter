@@ -62,6 +62,10 @@ export function GetDNSSettings() {
   return window['go']['main']['App']['GetDNSSettings']();
 }
 
+export function GetIPv6Policy() {
+  return window['go']['main']['App']['GetIPv6Policy']();
+}
+
 export function GetInterfaceSnapshot() {
   return window['go']['main']['App']['GetInterfaceSnapshot']();
 }
@@ -154,6 +158,10 @@ export function SetDNSSettings(arg1) {
   return window['go']['main']['App']['SetDNSSettings'](arg1);
 }
 
+export function SetIPv6Policy(arg1) {
+  return window['go']['main']['App']['SetIPv6Policy'](arg1);
+}
+
 export function SetProxyNodeFavorite(arg1, arg2) {
   return window['go']['main']['App']['SetProxyNodeFavorite'](arg1, arg2);
 }
@@ -180,6 +188,10 @@ export function Startup(arg1) {
 
 export function StopCore() {
   return window['go']['main']['App']['StopCore']();
+}
+
+export function TestDNSServer(arg1) {
+  return window['go']['main']['App']['TestDNSServer'](arg1);
 }
 
 export function TestProxyNode(arg1, arg2) {

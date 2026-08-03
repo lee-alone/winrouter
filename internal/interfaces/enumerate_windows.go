@@ -43,7 +43,10 @@ func Enumerate() ([]Adapter, error) {
 			if result[i].Candidate != result[j].Candidate {
 				return result[i].Candidate
 			}
-			return strings.ToLower(result[i].FriendlyName) < strings.ToLower(result[j].FriendlyName)
+			if strings.ToLower(result[i].FriendlyName) != strings.ToLower(result[j].FriendlyName) {
+				return strings.ToLower(result[i].FriendlyName) < strings.ToLower(result[j].FriendlyName)
+			}
+			return result[i].GUID < result[j].GUID
 		})
 		return result, nil
 	}
@@ -90,6 +93,14 @@ func mapAdapter(source *windows.IpAdapterAddresses) Adapter {
 			adapter.DNSServers = appendUnique(adapter.DNSServers, ip.String())
 		}
 	}
+	sort.Slice(adapter.Addresses, func(i, j int) bool {
+		if adapter.Addresses[i].IP != adapter.Addresses[j].IP {
+			return adapter.Addresses[i].IP < adapter.Addresses[j].IP
+		}
+		return adapter.Addresses[i].PrefixLength < adapter.Addresses[j].PrefixLength
+	})
+	sort.Strings(adapter.Gateways)
+	sort.Strings(adapter.DNSServers)
 	return adapter
 }
 

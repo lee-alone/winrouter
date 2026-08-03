@@ -46,6 +46,8 @@ export function GetDNSPresets():Promise<Array<dnssettings.Preset>>;
 
 export function GetDNSSettings():Promise<dnssettings.Settings>;
 
+export function GetIPv6Policy():Promise<string>;
+
 export function GetInterfaceSnapshot():Promise<interfacemanager.Snapshot>;
 
 export function GetObservations():Promise<main.ObservationSnapshot>;
@@ -92,6 +94,8 @@ export function SetAutostartEnabled(arg1:boolean):Promise<autostart.Status>;
 
 export function SetDNSSettings(arg1:dnssettings.Settings):Promise<dnssettings.Settings>;
 
+export function SetIPv6Policy(arg1:string):Promise<interfacemanager.Snapshot>;
+
 export function SetProxyNodeFavorite(arg1:string,arg2:boolean):Promise<nodes.Node>;
 
 export function SetTrafficBudget(arg1:trafficbudget.Settings):Promise<trafficbudget.Status>;
@@ -105,6 +109,8 @@ export function StartTray(arg1:Array<number>):Promise<void>;
 export function Startup(arg1:context.Context):Promise<void>;
 
 export function StopCore():Promise<core.Status>;
+
+export function TestDNSServer(arg1:dnssettings.Server):Promise<dnssettings.TestResult>;
 
 export function TestProxyNode(arg1:string,arg2:string):Promise<nodes.TestResult>;
 

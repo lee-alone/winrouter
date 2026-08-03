@@ -41,7 +41,16 @@ func Enumerate() ([]Route, error) {
 		if a.Bits() != b.Bits() {
 			return a.Bits() < b.Bits()
 		}
-		return result[i].InterfaceIndex < result[j].InterfaceIndex
+		if result[i].InterfaceIndex != result[j].InterfaceIndex {
+			return result[i].InterfaceIndex < result[j].InterfaceIndex
+		}
+		if result[i].InterfaceLUID != result[j].InterfaceLUID {
+			return result[i].InterfaceLUID < result[j].InterfaceLUID
+		}
+		if result[i].Metric != result[j].Metric {
+			return result[i].Metric < result[j].Metric
+		}
+		return result[i].Protocol < result[j].Protocol
 	})
 	return result, nil
 }

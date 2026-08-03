@@ -106,7 +106,7 @@ func ValidateMVPSemantics(generated Generated) error {
 			return semanticError("proxy endpoint must have an interface B loop-prevention rule")
 		}
 	}
-	if !model.DNS.IndependentCache || model.DNS.Strategy != "ipv4_only" || model.DNS.Final != "dns-global" {
+	if !model.DNS.IndependentCache || (model.DNS.Strategy != "ipv4_only" && model.DNS.Strategy != "prefer_ipv4") || model.DNS.Final != "dns-global" {
 		return semanticError("DNS cache isolation, strategy, or final server is invalid")
 	}
 	dnsTags := make(map[string]struct{}, len(model.DNS.Servers))
@@ -143,11 +143,18 @@ func ValidateMVPSemantics(generated Generated) error {
 			ipv6Rejected = true
 		}
 	}
-	if !ipv6Rejected {
-		return semanticError("IPv6 reject rule is missing")
+	if model.DNS.Strategy != "ipv4_only" && model.DNS.Strategy != "prefer_ipv4" {
+		return semanticError("unsupported DNS strategy %q", model.DNS.Strategy)
 	}
-	if len(model.DNS.Rules) == 0 || len(model.DNS.Rules[0].QueryType) != 1 || model.DNS.Rules[0].QueryType[0] != "AAAA" || model.DNS.Rules[0].Action != "reject" {
-		return semanticError("AAAA reject rule must be first")
+	if model.DNS.Strategy == "ipv4_only" {
+		if !ipv6Rejected {
+			return semanticError("IPv6 reject rule is missing")
+		}
+		if len(model.DNS.Rules) == 0 || len(model.DNS.Rules[0].QueryType) != 1 || model.DNS.Rules[0].QueryType[0] != "AAAA" || model.DNS.Rules[0].Action != "reject" {
+			return semanticError("AAAA reject rule must be first")
+		}
+	} else if ipv6Rejected {
+		return semanticError("IPv6 split must not include an IPv6 reject rule")
 	}
 	ruleSetTags := make(map[string]struct{}, len(model.Route.RuleSets))
 	for _, ruleSet := range model.Route.RuleSets {

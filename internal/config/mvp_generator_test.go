@@ -68,6 +68,29 @@ func TestGenerateMVPIsDeterministic(t *testing.T) {
 	}
 }
 
+func TestGenerateMVPSplitIPv6OmitsBlockRules(t *testing.T) {
+	input := fixtureInput(t)
+	input.IPv6 = IPv6Split
+	input.DirectPrefixes = append(input.DirectPrefixes, MVPDirectPrefix{Prefix: "2001:db8:1::/64", BindInterface: input.InterfaceA.BindInterface})
+	generated, err := GenerateMVP(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if generated.Model.DNS.Strategy != "prefer_ipv4" {
+		t.Fatalf("DNS strategy = %q", generated.Model.DNS.Strategy)
+	}
+	for _, rule := range generated.Model.DNS.Rules {
+		if len(rule.QueryType) == 1 && rule.QueryType[0] == "AAAA" && rule.Action == "reject" {
+			t.Fatalf("unexpected AAAA reject rule: %#v", rule)
+		}
+	}
+	for _, rule := range generated.Model.Route.Rules {
+		if rule.IPVersion == 6 && rule.Action == "reject" {
+			t.Fatalf("unexpected IPv6 reject rule: %#v", rule)
+		}
+	}
+}
+
 func TestGenerateMVPCustomRulesMapActionsAndPreserveOrder(t *testing.T) {
 	input := fixtureInput(t)
 	input.CustomRules = []MVPCustomRule{

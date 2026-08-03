@@ -9,8 +9,11 @@ import (
 )
 
 const (
-	StateSchemaVersion       = 2
-	legacyStateSchemaVersion = 1
+	StateSchemaVersion        = 3
+	legacyStateSchemaVersion2 = 2
+	legacyStateSchemaVersion  = 1
+	IPv6PolicyBlock           = "block"
+	IPv6PolicySplit           = "split"
 )
 
 var (
@@ -23,6 +26,7 @@ type State struct {
 	InterfaceA    interfaces.Identity `json:"interface_a"`
 	InterfaceB    interfaces.Identity `json:"interface_b"`
 	TUNPrefix     string              `json:"tun_prefix,omitempty"`
+	IPv6Policy    string              `json:"ipv6_policy"`
 }
 
 type Candidate struct {

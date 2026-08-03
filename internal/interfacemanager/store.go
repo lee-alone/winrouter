@@ -13,7 +13,7 @@ import (
 func LoadState(path string) (State, error) {
 	data, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
-		return State{SchemaVersion: StateSchemaVersion}, nil
+		return State{SchemaVersion: StateSchemaVersion, IPv6Policy: IPv6PolicyBlock}, nil
 	}
 	if err != nil {
 		return State{}, fmt.Errorf("read interface state: %w", err)
@@ -37,7 +37,7 @@ func decodeAndMigrateState(data []byte) (State, bool, error) {
 	if err := json.Unmarshal(data, &envelope); err != nil {
 		return State{}, false, fmt.Errorf("decode interface state: %w", err)
 	}
-	if envelope.SchemaVersion != legacyStateSchemaVersion && envelope.SchemaVersion != StateSchemaVersion {
+	if envelope.SchemaVersion != legacyStateSchemaVersion && envelope.SchemaVersion != legacyStateSchemaVersion2 && envelope.SchemaVersion != StateSchemaVersion {
 		return State{}, false, fmt.Errorf("unsupported interface state schema %d", envelope.SchemaVersion)
 	}
 	var state State
@@ -61,6 +61,13 @@ func normalizeAndValidateState(state *State) error {
 	state.InterfaceA.GUID = strings.TrimSpace(state.InterfaceA.GUID)
 	state.InterfaceB.GUID = strings.TrimSpace(state.InterfaceB.GUID)
 	state.TUNPrefix = strings.TrimSpace(state.TUNPrefix)
+	state.IPv6Policy = strings.TrimSpace(state.IPv6Policy)
+	if state.IPv6Policy == "" {
+		state.IPv6Policy = IPv6PolicyBlock
+	}
+	if state.IPv6Policy != IPv6PolicyBlock && state.IPv6Policy != IPv6PolicySplit {
+		return fmt.Errorf("unsupported IPv6 policy %q", state.IPv6Policy)
+	}
 	if state.TUNPrefix != "" {
 		prefix, err := netip.ParsePrefix(state.TUNPrefix)
 		if err != nil || !prefix.Addr().Is4() || prefix.Bits() != 30 || prefix != prefix.Masked() {

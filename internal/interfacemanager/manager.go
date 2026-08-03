@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/netip"
 	"strings"
 	"sync"
 	"time"
@@ -46,7 +47,7 @@ func New(options Options) (*Manager, error) {
 	if options.PollInterval <= 0 {
 		options.PollInterval = time.Second
 	}
-	state := State{SchemaVersion: StateSchemaVersion}
+	state := State{SchemaVersion: StateSchemaVersion, IPv6Policy: IPv6PolicyBlock}
 	var err error
 	if options.StatePath != "" {
 		state, err = LoadState(options.StatePath)
@@ -55,6 +56,26 @@ func New(options Options) (*Manager, error) {
 		}
 	}
 	return &Manager{options: options, state: state, subscribers: make(map[chan Event]struct{})}, nil
+}
+
+func (m *Manager) SetIPv6Policy(policy string) (Snapshot, error) {
+	if policy != IPv6PolicyBlock && policy != IPv6PolicySplit {
+		return Snapshot{}, fmt.Errorf("unsupported IPv6 policy %q", policy)
+	}
+	m.mu.Lock()
+	previous := m.state
+	m.state.IPv6Policy = policy
+	state := m.state
+	m.mu.Unlock()
+	if m.options.StatePath != "" {
+		if err := SaveState(m.options.StatePath, state); err != nil {
+			m.mu.Lock()
+			m.state = previous
+			m.mu.Unlock()
+			return Snapshot{}, err
+		}
+	}
+	return m.Refresh()
 }
 
 func (m *Manager) Refresh() (Snapshot, error) {
@@ -115,6 +136,12 @@ func (m *Manager) Snapshot() Snapshot {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return cloneSnapshot(m.snapshot)
+}
+
+func (m *Manager) IPv6Policy() string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.state.IPv6Policy
 }
 
 func (m *Manager) Subscribe(buffer int) (<-chan Event, func()) {
@@ -181,8 +208,21 @@ func buildSnapshot(sequence uint64, state State, adapters []interfaces.Adapter, 
 		}
 	}
 	for _, overlap := range topology.Overlaps {
-		if overlap.RequiresSelection {
+		if overlap.RequiresSelection && overlapBlocksPolicy(overlap, state.IPv6Policy) {
 			snapshot.Diagnostics = append(snapshot.Diagnostics, Diagnostic{Code: "prefix-overlap", Severity: "error", Message: fmt.Sprintf("%s on %s overlaps %s on %s", overlap.First.Prefix, overlap.First.AdapterName, overlap.Second.Prefix, overlap.Second.AdapterName)})
+		}
+	}
+	if state.IPv6Policy == IPv6PolicySplit {
+		for _, selection := range []ResolvedSelection{snapshot.InterfaceA, snapshot.InterfaceB} {
+			if selection.Status != "resolved" || selection.Match == nil {
+				continue
+			}
+			if !hasUsableIPv6(selection.Match.Adapter) {
+				snapshot.Diagnostics = append(snapshot.Diagnostics, Diagnostic{Code: "missing-ipv6-address-" + strings.ToLower(selection.Role), Severity: "error", Message: fmt.Sprintf("selected interface %s (%s) has no usable IPv6 address", selection.Role, selection.Match.Adapter.FriendlyName)})
+			}
+			if !hasIPv6DefaultRoute(routeTable, selection.Match.Adapter) {
+				snapshot.Diagnostics = append(snapshot.Diagnostics, Diagnostic{Code: "missing-ipv6-default-route-" + strings.ToLower(selection.Role), Severity: "error", Message: fmt.Sprintf("selected interface %s (%s) has no IPv6 default route", selection.Role, selection.Match.Adapter.FriendlyName)})
+			}
 		}
 	}
 	allocation, err := tunprefix.Allocate(pool, state.TUNPrefix, adapters, routeTable)
@@ -199,9 +239,37 @@ func buildSnapshot(sequence uint64, state State, adapters []interfaces.Adapter, 
 	return snapshot
 }
 
+func overlapBlocksPolicy(overlap interfaces.PrefixOverlap, policy string) bool {
+	if policy == IPv6PolicySplit {
+		return true
+	}
+	first, firstErr := netip.ParsePrefix(overlap.First.Prefix)
+	second, secondErr := netip.ParsePrefix(overlap.Second.Prefix)
+	return firstErr == nil && secondErr == nil && first.Addr().Is4() && second.Addr().Is4()
+}
+
 func hasIPv4DefaultRoute(routeTable []routes.Route, adapter interfaces.Adapter) bool {
 	for _, route := range routeTable {
 		if route.Prefix == "0.0.0.0/0" && route.InterfaceIndex == adapter.Index {
+			return true
+		}
+	}
+	return false
+}
+
+func hasIPv6DefaultRoute(routeTable []routes.Route, adapter interfaces.Adapter) bool {
+	for _, route := range routeTable {
+		if route.Prefix == "::/0" && route.InterfaceIndex == adapter.Index {
+			return true
+		}
+	}
+	return false
+}
+
+func hasUsableIPv6(adapter interfaces.Adapter) bool {
+	for _, address := range adapter.Addresses {
+		parsed, err := netip.ParseAddr(address.IP)
+		if err == nil && parsed.Is6() && !parsed.IsUnspecified() && !parsed.IsLoopback() && !parsed.IsLinkLocalUnicast() {
 			return true
 		}
 	}

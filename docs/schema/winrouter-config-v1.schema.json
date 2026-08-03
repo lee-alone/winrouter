@@ -79,7 +79,7 @@
       }
     },
     "proxy": { "$ref": "#/$defs/proxy" },
-    "ipv6": { "const": "block" }
+    "ipv6": { "enum": ["block", "split"] }
   },
   "allOf": [{
     "if": { "properties": { "mode": { "const": "proxy-split" } } },

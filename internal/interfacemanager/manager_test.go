@@ -188,10 +188,16 @@ func TestManagerRunPublishesNetworkChange(t *testing.T) {
 
 func TestManagerRunPublishesDefaultRouteChange(t *testing.T) {
 	first := adapter("{A}", "", "Ethernet A", "192.168.10.2", 24)
+	second := adapter("{B}", "", "Ethernet B", "192.168.20.2", 24)
+	first.Index = 1
+	second.Index = 2
 	var mu sync.Mutex
-	routeTable := []routes.Route{{Prefix: "0.0.0.0/0", InterfaceIndex: 1, Metric: 25}}
+	routeTable := []routes.Route{
+		{Prefix: "0.0.0.0/0", InterfaceIndex: first.Index, Metric: 25},
+		{Prefix: "0.0.0.0/0", InterfaceIndex: second.Index, Metric: 25},
+	}
 	manager, err := New(Options{
-		EnumerateInterfaces: func() ([]interfaces.Adapter, error) { return []interfaces.Adapter{first}, nil },
+		EnumerateInterfaces: func() ([]interfaces.Adapter, error) { return []interfaces.Adapter{first, second}, nil },
 		EnumerateRoutes: func() ([]routes.Route, error) {
 			mu.Lock()
 			defer mu.Unlock()
@@ -202,6 +208,9 @@ func TestManagerRunPublishesDefaultRouteChange(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if _, err := manager.Select(first, second); err != nil {
+		t.Fatal(err)
+	}
 	events, unsubscribe := manager.Subscribe(1)
 	defer unsubscribe()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -210,11 +219,11 @@ func TestManagerRunPublishesDefaultRouteChange(t *testing.T) {
 	go func() { done <- manager.Run(ctx) }()
 	waitForSequence(t, manager)
 	mu.Lock()
-	routeTable[0].InterfaceIndex = 2
+	routeTable = routeTable[1:]
 	mu.Unlock()
 	select {
 	case event := <-events:
-		if len(event.Snapshot.Routes) != 1 || event.Snapshot.Routes[0].InterfaceIndex != 2 {
+		if len(event.Snapshot.Routes) != 1 || event.Snapshot.Routes[0].InterfaceIndex != second.Index {
 			t.Fatalf("routes = %#v", event.Snapshot.Routes)
 		}
 	case <-time.After(time.Second):
@@ -223,6 +232,80 @@ func TestManagerRunPublishesDefaultRouteChange(t *testing.T) {
 	cancel()
 	if err := <-done; err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestManagerRunIgnoresUnselectedVirtualInterfaceChanges(t *testing.T) {
+	physical := adapter("{A}", "00:00:00:00:00:01", "Ethernet A", "192.168.10.2", 24)
+	virtual := adapter("{V}", "", "vEthernet (WSL)", "172.20.0.1", 20)
+	virtual.Kind = interfaces.KindWSL
+	virtual.Candidate = false
+	var mu sync.Mutex
+	current := []interfaces.Adapter{physical, virtual}
+	manager := newTestManager(t, "", func() []interfaces.Adapter {
+		mu.Lock()
+		defer mu.Unlock()
+		return append([]interfaces.Adapter(nil), current...)
+	}, []routes.Route{{Prefix: "0.0.0.0/0", InterfaceIndex: physical.Index}})
+	manager.options.PollInterval = 5 * time.Millisecond
+	events, unsubscribe := manager.Subscribe(1)
+	defer unsubscribe()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- manager.Run(ctx) }()
+	waitForSequence(t, manager)
+
+	mu.Lock()
+	current[1].Addresses = []interfaces.Address{{IP: "172.20.0.2", PrefixLength: 20}}
+	mu.Unlock()
+	select {
+	case event := <-events:
+		t.Fatalf("unexpected event for unselected virtual interface: %#v", event)
+	case <-time.After(30 * time.Millisecond):
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+}
+
+func TestFingerprintNormalizesOrderingAndTracksRelevantChanges(t *testing.T) {
+	first := adapter("{A}", "00:00:00:00:00:01", "Ethernet A", "192.168.10.2", 24)
+	first.Addresses = append(first.Addresses, interfaces.Address{IP: "2001:db8::2", PrefixLength: 64})
+	first.Gateways = []string{"192.168.10.1", "fe80::1"}
+	first.DNSServers = []string{"1.1.1.1", "2606:4700:4700::1111"}
+	second := adapter("{B}", "00:00:00:00:00:02", "Ethernet B", "192.168.20.2", 24)
+	virtual := adapter("{V}", "", "vEthernet (WSL)", "172.20.0.1", 20)
+	virtual.Kind = interfaces.KindWSL
+	virtual.Candidate = false
+	base := Snapshot{
+		Adapters: []interfaces.Adapter{first, second, virtual},
+		Routes: []routes.Route{
+			{Prefix: "0.0.0.0/0", InterfaceIndex: first.Index, Metric: 10},
+			{Prefix: "0.0.0.0/0", InterfaceIndex: second.Index, Metric: 20},
+			{Prefix: "172.20.0.0/20", InterfaceIndex: virtual.Index},
+		},
+		InterfaceA: ResolvedSelection{Role: "A", Saved: interfaces.Identity{GUID: first.GUID}, Match: &interfaces.Match{Adapter: first}, Status: "resolved"},
+		InterfaceB: ResolvedSelection{Role: "B", Saved: interfaces.Identity{GUID: second.GUID}, Match: &interfaces.Match{Adapter: second}, Status: "resolved"},
+		TUN:        &tunprefix.Allocation{Prefix: "172.19.0.0/30"},
+	}
+	reordered := base
+	reordered.Adapters = append([]interfaces.Adapter(nil), base.Adapters...)
+	reordered.Adapters[0].Addresses = []interfaces.Address{first.Addresses[1], first.Addresses[0]}
+	reordered.Adapters[0].Gateways = []string{first.Gateways[1], first.Gateways[0]}
+	reordered.Adapters[0].DNSServers = []string{first.DNSServers[1], first.DNSServers[0]}
+	reordered.Routes = []routes.Route{base.Routes[2], base.Routes[1], base.Routes[0]}
+	reordered.Adapters[2].Addresses = []interfaces.Address{{IP: "172.20.0.2", PrefixLength: 20}}
+	if fingerprint(base) != fingerprint(reordered) {
+		t.Fatal("ordering or unselected virtual interface change altered fingerprint")
+	}
+
+	changed := base
+	changed.Adapters = append([]interfaces.Adapter(nil), base.Adapters...)
+	changed.Adapters[0].Gateways = []string{"192.168.10.254", "fe80::1"}
+	if fingerprint(base) == fingerprint(changed) {
+		t.Fatal("selected physical gateway change did not alter fingerprint")
 	}
 }
 

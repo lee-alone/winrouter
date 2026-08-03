@@ -54,6 +54,7 @@ pnpm-debug.log*
 /resources/core/*.dll
 
 # Captures, diagnostics, and temporary files
+/debug_log/
 *.etl
 *.pcap
 *.pcapng
