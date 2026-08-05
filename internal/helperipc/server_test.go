@@ -18,6 +18,8 @@ type fakeService struct {
 	mu                          sync.Mutex
 	validated, applied, stopped int
 	status                      core.Status
+	resetResult                 NetworkResetResult
+	resetCount                  int
 }
 
 func (s *fakeService) Validate([]byte) error {
@@ -41,6 +43,12 @@ func (s *fakeService) Stop() error {
 	return nil
 }
 func (s *fakeService) Status() core.Status { s.mu.Lock(); defer s.mu.Unlock(); return s.status }
+func (s *fakeService) ResetNetworkStack() (NetworkResetResult, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.resetCount++
+	return s.resetResult, nil
+}
 
 func TestServerClientAllowsOnlyStructuredAuthenticatedMethods(t *testing.T) {
 	service := &fakeService{}
@@ -64,6 +72,23 @@ func TestServerClientAllowsOnlyStructuredAuthenticatedMethods(t *testing.T) {
 	}
 	if err := client.Call(MethodApply, ConfigParams{Config: []byte(`"cmd.exe"`)}, nil); err == nil {
 		t.Fatal("non-object config accepted")
+	}
+}
+
+func TestServerAllowsOnlyParameterlessNetworkReset(t *testing.T) {
+	expected := NetworkResetResult{Success: true, RestartRequired: true, Steps: []NetworkResetStep{{Command: "netsh winsock reset", Success: true}}}
+	service := &fakeService{resetResult: expected}
+	client, closeServer := startTestServer(t, testToken, service)
+	defer closeServer()
+	if err := client.Call(MethodResetNetworkStack, map[string]string{"command": "cmd.exe"}, nil); err == nil {
+		t.Fatal("network reset accepted parameters")
+	}
+	var result NetworkResetResult
+	if err := client.Call(MethodResetNetworkStack, nil, &result); err != nil {
+		t.Fatal(err)
+	}
+	if !result.Success || !result.RestartRequired || service.resetCount != 1 {
+		t.Fatalf("result=%#v resetCount=%d", result, service.resetCount)
 	}
 }
 

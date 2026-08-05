@@ -138,6 +138,10 @@ export function ResetTrafficBudget() {
   return window['go']['main']['App']['ResetTrafficBudget']();
 }
 
+export function ResetWindowsNetworkStack() {
+  return window['go']['main']['App']['ResetWindowsNetworkStack']();
+}
+
 export function RunHealthProbe(arg1) {
   return window['go']['main']['App']['RunHealthProbe'](arg1);
 }

@@ -54,7 +54,7 @@ func (s *Server) Serve(listener net.Listener) error {
 }
 
 func (s *Server) handle(connection net.Conn) {
-	_ = connection.SetDeadline(time.Now().Add(30 * time.Second))
+	_ = connection.SetDeadline(time.Now().Add(2 * time.Minute))
 	data, err := readFrame(connection)
 	if err != nil {
 		_ = writeFrame(connection, Response{OK: false, Error: &RPCError{Code: "invalid-frame", Message: err.Error()}})
@@ -134,6 +134,23 @@ func (s *Server) dispatch(request Request) Response {
 		response.OK = true
 		response.Result = s.service.Status()
 		s.shutdownOnce.Do(func() { close(s.shutdown) })
+	case MethodResetNetworkStack:
+		if !emptyParams(request.Params) {
+			response.Error = &RPCError{Code: "invalid-params", Message: "network reset does not accept parameters"}
+			return response
+		}
+		service, ok := s.service.(NetworkResetService)
+		if !ok {
+			response.Error = &RPCError{Code: "unknown-method", Message: "method is not allowed"}
+			return response
+		}
+		result, err := service.ResetNetworkStack()
+		if err != nil {
+			response.Error = &RPCError{Code: "operation-failed", Message: err.Error()}
+			return response
+		}
+		response.OK = true
+		response.Result = result
 	case MethodFaultTerminateCore:
 		if !emptyParams(request.Params) {
 			response.Error = &RPCError{Code: "invalid-params", Message: "fault termination does not accept parameters"}

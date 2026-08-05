@@ -784,6 +784,59 @@ export namespace main {
 	        this.ready = source["ready"];
 	    }
 	}
+	export class NetworkResetStep {
+	    command: string;
+	    success: boolean;
+	    exit_code: number;
+	    output?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new NetworkResetStep(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.command = source["command"];
+	        this.success = source["success"];
+	        this.exit_code = source["exit_code"];
+	        this.output = source["output"];
+	    }
+	}
+	export class NetworkResetResult {
+	    success: boolean;
+	    restart_required: boolean;
+	    steps: NetworkResetStep[];
+	
+	    static createFrom(source: any = {}) {
+	        return new NetworkResetResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.success = source["success"];
+	        this.restart_required = source["restart_required"];
+	        this.steps = this.convertValues(source["steps"], NetworkResetStep);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	
 	export class ObservationSnapshot {
 	    logs: observability.LogEntry[];
 	    probes: observability.ProbeResult[];

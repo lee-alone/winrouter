@@ -58,6 +58,7 @@ type App struct {
 	lastConfig         *config.MVPConfig
 	tray               apptray.Controller
 	exiting            atomic.Bool
+	windowVisible      atomic.Bool
 }
 
 type ApplicationStatus struct {
@@ -69,7 +70,24 @@ type ApplicationStatus struct {
 	Ready       bool   `json:"ready"`
 }
 
-func NewApp() *App { return &App{observations: observability.NewStore(500)} }
+type NetworkResetStep struct {
+	Command  string `json:"command"`
+	Success  bool   `json:"success"`
+	ExitCode int    `json:"exit_code"`
+	Output   string `json:"output,omitempty"`
+}
+
+type NetworkResetResult struct {
+	Success         bool               `json:"success"`
+	RestartRequired bool               `json:"restart_required"`
+	Steps           []NetworkResetStep `json:"steps"`
+}
+
+func NewApp() *App {
+	app := &App{observations: observability.NewStore(500)}
+	app.windowVisible.Store(true)
+	return app
+}
 
 func (a *App) Shutdown(context.Context) {
 	a.tray.Stop()
@@ -90,8 +108,12 @@ func (a *App) Shutdown(context.Context) {
 
 func (a *App) StartTray(icon []byte) {
 	a.tray.Start(icon, apptray.Actions{
-		Show:  func() { runtime.WindowShow(a.ctx); runtime.WindowUnminimise(a.ctx) },
-		Start: func() { runtime.WindowShow(a.ctx); runtime.EventsEmit(a.ctx, "tray:start-core") },
+		Show:   a.showMainWindow,
+		Toggle: a.toggleMainWindow,
+		Start: func() {
+			a.showMainWindow()
+			runtime.EventsEmit(a.ctx, "tray:start-core")
+		},
 		Stop: func() {
 			if _, err := a.StopCore(); err != nil {
 				a.observations.Log(observability.LevelError, "tray", "Core stop from tray failed", newCorrelationID(), map[string]any{"error": err.Error()})
@@ -104,11 +126,26 @@ func (a *App) StartTray(icon []byte) {
 	})
 }
 
+func (a *App) showMainWindow() {
+	a.windowVisible.Store(true)
+	runtime.WindowShow(a.ctx)
+	runtime.WindowUnminimise(a.ctx)
+}
+
+func (a *App) toggleMainWindow() {
+	if a.windowVisible.CompareAndSwap(true, false) {
+		runtime.WindowHide(a.ctx)
+		return
+	}
+	a.showMainWindow()
+}
+
 func (a *App) BeforeClose(ctx context.Context) bool {
 	if a.exiting.Load() {
 		return false
 	}
 	runtime.WindowHide(ctx)
+	a.windowVisible.Store(false)
 	return true
 }
 
@@ -991,6 +1028,33 @@ func (a *App) StopCore() (core.Status, error) {
 		a.observations.Log(observability.LevelInfo, "core", "Core stopped", "", map[string]any{"generation": status.Generation})
 	}
 	return status, err
+}
+
+func (a *App) ResetWindowsNetworkStack() (NetworkResetResult, error) {
+	if _, err := a.StopCore(); err != nil {
+		return NetworkResetResult{}, fmt.Errorf("stop routing core: %w", err)
+	}
+	session, err := a.ensureHelper()
+	if err != nil {
+		return NetworkResetResult{}, err
+	}
+	ctx, cancel := context.WithTimeout(a.ctx, 2*time.Minute)
+	defer cancel()
+	var result helperipc.NetworkResetResult
+	if err := session.Client.CallContext(ctx, helperipc.MethodResetNetworkStack, nil, &result); err != nil {
+		a.observations.Log(observability.LevelError, "network-reset", "Windows network stack reset failed", newCorrelationID(), map[string]any{"error": err.Error()})
+		return NetworkResetResult{}, err
+	}
+	level := observability.LevelInfo
+	if !result.Success {
+		level = observability.LevelWarning
+	}
+	a.observations.Log(level, "network-reset", "Windows network stack reset completed", "", map[string]any{"success": result.Success, "restart_required": result.RestartRequired})
+	converted := NetworkResetResult{Success: result.Success, RestartRequired: result.RestartRequired, Steps: make([]NetworkResetStep, len(result.Steps))}
+	for index, step := range result.Steps {
+		converted.Steps[index] = NetworkResetStep{Command: step.Command, Success: step.Success, ExitCode: step.ExitCode, Output: step.Output}
+	}
+	return converted, nil
 }
 
 func trayStatusLabel(status recovery.Status) string {

@@ -84,6 +84,8 @@ export function RefreshSubscription(arg1:string):Promise<subscriptions.Subscript
 
 export function ResetTrafficBudget():Promise<trafficbudget.Status>;
 
+export function ResetWindowsNetworkStack():Promise<main.NetworkResetResult>;
+
 export function RunHealthProbe(arg1:observability.ProbeRequest):Promise<observability.ProbeResult>;
 
 export function SelectInterfaces(arg1:string,arg2:string):Promise<interfacemanager.Snapshot>;

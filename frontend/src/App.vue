@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
-import { AddProxyNode, AddSubscription, ApplyCoreConfiguration, ApplySelectedProxyConfiguration, ConfigureRemoteRuleSet, ConfigureSRSSource, DeleteProxyNode, DeleteSRSSource, DeleteSubscription, ExportDiagnosticBundle, GetAutostartStatus, GetCoreStatus, GetDNSPresets, GetDNSSettings, GetInterfaceSnapshot, GetIPv6Policy, GetObservations, GetRecoveryStatus, GetRemoteRuleSet, GetSRSPresets, GetStatus, GetTrafficBudgetStatus, InspectProcessRules, ListProxyNodes, ListSRSSources, ListSubscriptions, PreviewCoreRules, PreviewDiagnosticBundle, RecordApplicationLog, RefreshRemoteRuleSet, RefreshSRSSource, RefreshSubscription, ResetTrafficBudget, RunHealthProbe, SelectInterfaces, SelectProxyNode, SetAutostartEnabled, SetDNSSettings, SetIPv6Policy, SetProxyNodeFavorite, SetTrafficBudget, SpeedTestProxyNodes, StopCore, TestDNSServer, TestProxyNode, UpdateProxyNode, UpdateSubscription, ValidateCoreConfiguration, ValidateSelectedProxyConfiguration } from '../wailsjs/go/main/App'
-import type { config, core, interfacemanager, interfaces, nodes, observability, processrules, rulesets, srssets, subscriptions } from '../wailsjs/go/models'
+import { AddProxyNode, AddSubscription, ApplyCoreConfiguration, ApplySelectedProxyConfiguration, ConfigureRemoteRuleSet, ConfigureSRSSource, DeleteProxyNode, DeleteSRSSource, DeleteSubscription, ExportDiagnosticBundle, GetAutostartStatus, GetCoreStatus, GetDNSPresets, GetDNSSettings, GetInterfaceSnapshot, GetIPv6Policy, GetObservations, GetRecoveryStatus, GetRemoteRuleSet, GetSRSPresets, GetStatus, GetTrafficBudgetStatus, InspectProcessRules, ListProxyNodes, ListSRSSources, ListSubscriptions, PreviewCoreRules, PreviewDiagnosticBundle, RecordApplicationLog, RefreshRemoteRuleSet, RefreshSRSSource, RefreshSubscription, ResetTrafficBudget, ResetWindowsNetworkStack, RunHealthProbe, SelectInterfaces, SelectProxyNode, SetAutostartEnabled, SetDNSSettings, SetIPv6Policy, SetProxyNodeFavorite, SetTrafficBudget, SpeedTestProxyNodes, StopCore, TestDNSServer, TestProxyNode, UpdateProxyNode, UpdateSubscription, ValidateCoreConfiguration, ValidateSelectedProxyConfiguration } from '../wailsjs/go/main/App'
+import type { config, core, interfacemanager, interfaces, main, nodes, observability, processrules, rulesets, srssets, subscriptions } from '../wailsjs/go/models'
 import { EventsOn } from '../wailsjs/runtime/runtime'
 import type { ApplicationStatus } from './vite-env'
 import { locale, setLocale, t, type Locale } from './i18n'
@@ -59,6 +59,8 @@ const dnsTests = ref<Record<'domestic' | 'global', DNSTestState>>({ domestic: 'i
 const observationsError = ref('')
 const ipv6Policy = ref<'block' | 'split'>('block')
 const ipv6Busy = ref(false)
+const networkResetBusy = ref(false)
+const networkResetResult = ref<main.NetworkResetResult>()
 const proxyNodes = ref<nodes.Node[]>([])
 const proxyFormOpen = ref(false)
 const proxyForm = ref({ id: '', name: '', type: 'http', server: '', port: 8080, username: '', password: '', clear_password: false })
@@ -627,6 +629,25 @@ async function resetTrafficBudget() {
   try { observations.value.traffic_budget = await ResetTrafficBudget() as TrafficBudgetStatus; notice.value = '本月本地流量统计已归零。' }
   catch (reason) { error.value = `无法重置流量统计：${messageOf(reason)}` } finally { budgetBusy.value = false }
 }
+async function resetWindowsNetworkStack() {
+  const warning = '此操作将停止分流核心，并重置 Windows Winsock、TCP/IP 和 DNS 缓存。可能清除静态 IP、网关、DNS、VPN 或虚拟网卡配置，执行期间网络会中断，完成后通常必须重启 Windows。是否继续？'
+  if (!window.confirm(warning)) return
+  if (!window.confirm('最后确认：立即执行系统级网络重置？执行后 WinRouter 不会自动重新启动分流核心。')) return
+  networkResetBusy.value = true
+  networkResetResult.value = undefined
+  error.value = ''
+  notice.value = ''
+  try {
+    const result = await ResetWindowsNetworkStack() as main.NetworkResetResult
+    networkResetResult.value = result
+    coreStatus.value = { ...coreStatus.value, state: 'stopped', pid: 0 }
+    notice.value = result.success ? '网络组件重置已完成。请保存工作并重启 Windows。' : '网络组件重置未全部成功，请查看各步骤结果后重启 Windows。'
+  } catch (reason) {
+    error.value = `无法重置 Windows 网络组件：${messageOf(reason)}`
+  } finally {
+    networkResetBusy.value = false
+  }
+}
 function chooseDNSPreset(scope: 'domestic' | 'global') {
   const target = dnsSettings.value[scope]
   if (!target.preset_id) return
@@ -1023,6 +1044,19 @@ onBeforeUnmount(() => {
           <div class="setting-row">
             <div><h2>{{ t('settings.autostart') }}</h2><p>{{ t('settings.autostartDetail') }}</p></div>
             <label class="toggle"><input v-model="autostartEnabled" type="checkbox" :disabled="autostartBusy" @change="updateAutostart"><span>{{ t(autostartEnabled ? 'common.enabled' : 'common.disabled') }}</span></label>
+          </div>
+        </section>
+        <section class="settings-list network-reset-section" aria-label="高级网络修复">
+          <div class="setting-row network-reset-setting">
+            <div><p class="section-kicker">高级修复</p><h2>重置 Windows 网络组件</h2><p class="danger-copy">此操作会停止分流核心，并重置 Winsock、TCP/IP 与 DNS 缓存。可能清除静态 IP、网关、DNS、VPN 或虚拟网卡配置，导致网络中断；完成后通常需要重启 Windows。</p></div>
+            <button type="button" class="danger-button" :disabled="networkResetBusy" @click="resetWindowsNetworkStack">{{ networkResetBusy ? '正在重置' : '重置网络组件' }}</button>
+          </div>
+          <div v-if="networkResetResult" class="network-reset-result" :class="{ failed: !networkResetResult.success }">
+            <strong>{{ networkResetResult.success ? '全部步骤已完成' : '部分步骤执行失败' }} · {{ networkResetResult.restart_required ? '需要重启 Windows' : '无需重启' }}</strong>
+            <div v-for="step in networkResetResult.steps" :key="step.command" class="network-reset-step">
+              <span :class="step.success ? 'step-success' : 'step-failed'">{{ step.success ? '成功' : `失败 (${step.exit_code})` }}</span><code>{{ step.command }}</code>
+              <pre v-if="step.output">{{ step.output }}</pre>
+            </div>
           </div>
         </section>
       </template>
