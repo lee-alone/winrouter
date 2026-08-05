@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
-import { AddProxyNode, AddSubscription, ApplyCoreConfiguration, ApplySelectedProxyConfiguration, ConfigureRemoteRuleSet, ConfigureSRSSource, DeleteProxyNode, DeleteSRSSource, DeleteSubscription, ExportDiagnosticBundle, GetAutostartStatus, GetCoreStatus, GetDNSPresets, GetDNSSettings, GetInterfaceSnapshot, GetIPv6Policy, GetObservations, GetRecoveryStatus, GetRemoteRuleSet, GetSRSPresets, GetStatus, GetTrafficBudgetStatus, InspectProcessRules, ListProxyNodes, ListSRSSources, ListSubscriptions, PreviewCoreRules, PreviewDiagnosticBundle, RecordApplicationLog, RefreshRemoteRuleSet, RefreshSRSSource, RefreshSubscription, ResetTrafficBudget, ResetWindowsNetworkStack, RunHealthProbe, SelectInterfaces, SelectProxyNode, SetAutostartEnabled, SetDNSSettings, SetIPv6Policy, SetProxyNodeFavorite, SetTrafficBudget, SpeedTestProxyNodes, StopCore, TestDNSServer, TestProxyNode, UpdateProxyNode, UpdateSubscription, ValidateCoreConfiguration, ValidateSelectedProxyConfiguration } from '../wailsjs/go/main/App'
+import { AddProxyNode, AddSubscription, ApplyCoreConfiguration, ApplySelectedProxyConfiguration, ConfigureRemoteRuleSet, ConfigureSRSSource, DeleteProxyNode, DeleteSRSSource, DeleteSubscription, ExportDiagnosticBundle, GetAutostartStatus, GetConnectionObservationEnabled, GetCoreStatus, GetDNSPresets, GetDNSSettings, GetInterfaceSnapshot, GetIPv6Policy, GetObservations, GetRecoveryStatus, GetRemoteRuleSet, GetSRSPresets, GetStatus, GetTrafficBudgetStatus, InspectProcessRules, ListProxyNodes, ListSRSSources, ListSubscriptions, PreviewCoreRules, PreviewDiagnosticBundle, RecordApplicationLog, RefreshRemoteRuleSet, RefreshSRSSource, RefreshSubscription, ResetTrafficBudget, ResetWindowsNetworkStack, RunHealthProbe, SelectInterfaces, SelectProxyNode, SetAutostartEnabled, SetConnectionObservationEnabled, SetDNSSettings, SetIPv6Policy, SetProxyNodeFavorite, SetTrafficBudget, SpeedTestProxyNodes, StopCore, TestDNSServer, TestProxyNode, UpdateProxyNode, UpdateSubscription, ValidateCoreConfiguration, ValidateSelectedProxyConfiguration } from '../wailsjs/go/main/App'
 import type { config, core, interfacemanager, interfaces, main, nodes, observability, processrules, rulesets, srssets, subscriptions } from '../wailsjs/go/models'
 import { EventsOn } from '../wailsjs/runtime/runtime'
 import type { ApplicationStatus } from './vite-env'
@@ -25,6 +25,7 @@ const logFilter = ref<'all' | LogLevel>('all')
 const logs = ref<LogEntry[]>([])
 type ConnectionSummary = { active_tcp: number; established_tcp: number; listening_tcp: number; udp_endpoints: number; sampled_at?: string }
 type RuleHit = { outbound: string; count: number }
+type ConnectionEvent = { domain?: string; address_type?: string; ip?: string; protocol?: string; rule?: string; outbound?: string; attempts: number; established: number; bytes_up: number; bytes_down: number; last_seen?: string }
 type TrafficPoint = { at: number; aDown: number; aUp: number; bDown: number; bUp: number }
 type CounterBaseline = { at: number; received: number; transmitted: number }
 type UsageBaseline = { received: number; transmitted: number; reset_at: string }
@@ -39,7 +40,7 @@ function normalizeDNSSettings(value: DNSSettings): DNSSettings {
   return { ...value, domestic: normalizeServer(value.domestic), global: normalizeServer(value.global) }
 }
 const emptyTrafficBudget: TrafficBudgetStatus = { enabled: false, budget_gb: 100, warning_percent: 80, period: '', used_bytes: 0, budget_bytes: 0, used_percent: 0, warning_reached: false, limit_reached: false }
-const observations = ref<{ probes: observability.ProbeResult[]; counters: observability.InterfaceCounter[]; rule_sets: observability.RuleSetMetadata[]; connections: ConnectionSummary; rule_hits: RuleHit[]; traffic_budget: TrafficBudgetStatus }>({ probes: [], counters: [], rule_sets: [], connections: { active_tcp: 0, established_tcp: 0, listening_tcp: 0, udp_endpoints: 0 }, rule_hits: [], traffic_budget: emptyTrafficBudget })
+const observations = ref<{ probes: observability.ProbeResult[]; counters: observability.InterfaceCounter[]; rule_sets: observability.RuleSetMetadata[]; connections: ConnectionSummary; rule_hits: RuleHit[]; connection_observation: boolean; connection_events: ConnectionEvent[]; traffic_budget: TrafficBudgetStatus }>({ probes: [], counters: [], rule_sets: [], connections: { active_tcp: 0, established_tcp: 0, listening_tcp: 0, udp_endpoints: 0 }, rule_hits: [], connection_observation: false, connection_events: [], traffic_budget: emptyTrafficBudget })
 const traffic = ref<TrafficPoint[]>([])
 const counterBaselines = new Map<string, CounterBaseline>()
 const usageBaselines = ref<Record<string, UsageBaseline>>({})
@@ -252,8 +253,16 @@ function normalizeObservations(value?: Partial<typeof observations.value>) {
       sampled_at: rawConnections.sampled_at,
     },
     rule_hits: rawHits.map(item => ({ outbound: String(item?.outbound ?? ''), count: observationCount(item?.count) })),
+    connection_observation: Boolean(value?.connection_observation),
+    connection_events: Array.isArray(value?.connection_events) ? value.connection_events : [],
     traffic_budget: value?.traffic_budget ?? emptyTrafficBudget,
   }
+}
+
+async function toggleConnectionObservation() {
+  error.value = ''
+  try { await SetConnectionObservationEnabled(!observations.value.connection_observation); observations.value.connection_observation = await GetConnectionObservationEnabled(); notice.value = observations.value.connection_observation ? '连接观测已开启，下次启动核心后生效。' : '连接观测已关闭。' }
+  catch (reason) { error.value = messageOf(reason) }
 }
 
 function sampleTraffic(counters: observability.InterfaceCounter[]) {
@@ -836,6 +845,15 @@ onBeforeUnmount(() => {
             </article>
           </div>
         </section>
+        <section class="traffic-section connection-observation">
+          <div class="traffic-section-heading"><div><p class="section-kicker">连接观测</p><h2>域名与出口</h2></div><button type="button" class="secondary" :disabled="coreStatus.state === 'running'" @click="toggleConnectionObservation">{{ observations.connection_observation ? '关闭观测' : '开启观测' }}</button></div>
+          <p class="traffic-disclaimer">仅在开启后读取本机 sing-box 连接 API；切换前需停止核心。</p>
+          <div v-if="observations.connection_observation && observations.connection_events.length" class="connection-table">
+            <div class="connection-row connection-head"><span>域名 / IP</span><span>类型</span><span>规则</span><span>出口</span><span>连接</span><span>流量</span></div>
+            <div v-for="item in observations.connection_events" :key="`${item.domain}-${item.ip}-${item.outbound}`" class="connection-row"><span><strong>{{ item.domain || item.ip || '未知' }}</strong><small v-if="item.domain && item.ip && item.domain !== item.ip">{{ item.ip }}</small></span><span>{{ item.address_type || '-' }} · {{ item.protocol || '-' }}</span><span>{{ item.rule || 'final' }}</span><span>{{ item.outbound || '未知' }}</span><span>{{ item.established }} / {{ item.attempts }}</span><span>{{ formatBytes(item.bytes_down) }} ↓ · {{ formatBytes(item.bytes_up) }} ↑</span></div>
+          </div>
+          <p v-else-if="observations.connection_observation" class="traffic-disclaimer">尚无活动连接；核心启动后每 5 秒刷新。</p>
+        </section>
         <section class="monitor-notes"><div><strong>{{ t('monitor.ruleScope') }}</strong><span>{{ t('monitor.ruleScopeDetail') }}</span></div><div><strong>{{ t('monitor.connectionScope') }}</strong><span>{{ t('monitor.connectionScopeDetail') }}</span></div></section>
       </template>
 
@@ -1003,7 +1021,7 @@ onBeforeUnmount(() => {
       <template v-else>
         <section class="settings-list" aria-label="双出口 DNS 设置">
           <div class="setting-row dns-setting">
-            <div><h2>双出口 DNS</h2><p>查询分别绑定实际网卡；DoH 固定使用 /dns-query，所有上游必须填写固定 IP 以避免解析环路。</p></div>
+            <div><h2>双出口 DNS</h2><p>查询分别绑定实际网卡；DoH 固定使用 /dns-query，所有上游必须填写固定 IP 以避免解析环路。DNS 测试仅在核心停止时可用。</p></div>
             <div class="dns-controls">
               <div v-for="scope in (['domestic', 'global'] as const)" :key="scope" class="dns-row">
                 <label class="dns-preset">{{ scope === 'domestic' ? `国内线路 · ${selectedAdapterA?.friendly_name ?? '网卡 A'}` : `全球线路 · ${selectedAdapterB?.friendly_name ?? '网卡 B'}` }}
@@ -1015,7 +1033,7 @@ onBeforeUnmount(() => {
                 <label>服务器 IP<input v-model.trim="dnsSettings[scope].server" required :readonly="Boolean(dnsSettings[scope].preset_id)" placeholder="1.1.1.1" @input="setCustomDNS(scope)"></label>
                 <label>端口<input v-model.number="dnsSettings[scope].port" type="number" min="1" max="65535" required :readonly="Boolean(dnsSettings[scope].preset_id)" @input="setCustomDNS(scope)"></label>
                 <label :class="{ 'dns-field-placeholder': dnsSettings[scope].type === 'udp' }">TLS 域名<input v-model.trim="dnsSettings[scope].server_name" :required="dnsSettings[scope].type !== 'udp'" :disabled="dnsSettings[scope].type === 'udp'" :readonly="Boolean(dnsSettings[scope].preset_id)" :placeholder="dnsSettings[scope].type === 'udp' ? 'UDP 不需要' : 'dns.example.com'" @input="setCustomDNS(scope)"></label>
-                <button type="button" class="dns-test" :class="dnsTests[scope]" :disabled="dnsTests[scope] === 'testing' || dnsBusy" @click="testDNSServer(scope)">{{ dnsTests[scope] === 'testing' ? '测试中' : dnsTests[scope] === 'success' ? '成功' : dnsTests[scope] === 'failed' ? '失败' : '测试' }}</button>
+                <button type="button" class="dns-test" :class="dnsTests[scope]" :disabled="dnsTests[scope] === 'testing' || dnsBusy || isRunning" :title="isRunning ? '核心运行时 DNS 请求由 hijack-dns 接管，请停止核心后测试' : ''" @click="testDNSServer(scope)">{{ dnsTests[scope] === 'testing' ? '测试中' : dnsTests[scope] === 'success' ? '成功' : dnsTests[scope] === 'failed' ? '失败' : '测试' }}</button>
               </div>
               <div class="dns-actions"><button type="button" class="primary" :disabled="dnsBusy || isRunning" @click="saveDNSSettings">{{ dnsBusy ? '正在校验' : '保存 DNS' }}</button></div>
             </div>

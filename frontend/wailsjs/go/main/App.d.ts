@@ -40,6 +40,8 @@ export function ExportDiagnosticBundle():Promise<string>;
 
 export function GetAutostartStatus():Promise<autostart.Status>;
 
+export function GetConnectionObservationEnabled():Promise<boolean>;
+
 export function GetCoreStatus():Promise<core.Status>;
 
 export function GetDNSPresets():Promise<Array<dnssettings.Preset>>;
@@ -93,6 +95,8 @@ export function SelectInterfaces(arg1:string,arg2:string):Promise<interfacemanag
 export function SelectProxyNode(arg1:string):Promise<nodes.Node>;
 
 export function SetAutostartEnabled(arg1:boolean):Promise<autostart.Status>;
+
+export function SetConnectionObservationEnabled(arg1:boolean):Promise<void>;
 
 export function SetDNSSettings(arg1:dnssettings.Settings):Promise<dnssettings.Settings>;
 

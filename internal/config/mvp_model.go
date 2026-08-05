@@ -9,18 +9,20 @@ const (
 )
 
 type MVPConfig struct {
-	SchemaVersion  int               `json:"schema_version"`
-	Mode           string            `json:"mode"`
-	TUN            MVPTUN            `json:"tun"`
-	InterfaceA     MVPInterface      `json:"interface_a"`
-	InterfaceB     MVPInterface      `json:"interface_b"`
-	DirectPrefixes []MVPDirectPrefix `json:"direct_prefixes"`
-	CustomRules    []MVPCustomRule   `json:"custom_rules,omitempty"`
-	RuleSets       []MVPRuleSet      `json:"rule_sets,omitempty"`
-	Domestic       MVPDomestic       `json:"domestic"`
-	DNS            MVPDNS            `json:"dns"`
-	Proxy          *MVPProxy         `json:"proxy,omitempty"`
-	IPv6           string            `json:"ipv6"`
+	SchemaVersion         int               `json:"schema_version"`
+	Mode                  string            `json:"mode"`
+	TUN                   MVPTUN            `json:"tun"`
+	InterfaceA            MVPInterface      `json:"interface_a"`
+	InterfaceB            MVPInterface      `json:"interface_b"`
+	DirectPrefixes        []MVPDirectPrefix `json:"direct_prefixes"`
+	CustomRules           []MVPCustomRule   `json:"custom_rules,omitempty"`
+	RuleSets              []MVPRuleSet      `json:"rule_sets,omitempty"`
+	Domestic              MVPDomestic       `json:"domestic"`
+	DNS                   MVPDNS            `json:"dns"`
+	Proxy                 *MVPProxy         `json:"proxy,omitempty"`
+	IPv6                  string            `json:"ipv6"`
+	ConnectionObservation bool              `json:"connection_observation,omitempty"`
+	ConnectionAPISecret   string            `json:"connection_api_secret,omitempty"`
 }
 
 type MVPRuleSet struct {

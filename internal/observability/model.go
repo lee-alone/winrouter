@@ -60,6 +60,7 @@ type RuleHit struct {
 	Count    int    `json:"count"`
 }
 
+
 type RuleSetMetadata struct {
 	Name       string `json:"name"`
 	Version    string `json:"version"`

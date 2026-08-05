@@ -13,11 +13,20 @@ const (
 )
 
 type MinimalTUN struct {
-	Log       LogConfig    `json:"log"`
-	DNS       DNSConfig    `json:"dns"`
-	Inbounds  []TUNInbound `json:"inbounds"`
-	Outbounds []Outbound   `json:"outbounds"`
-	Route     RouteConfig  `json:"route"`
+	Log          LogConfig           `json:"log"`
+	Experimental *ExperimentalConfig `json:"experimental,omitempty"`
+	DNS          DNSConfig           `json:"dns"`
+	Inbounds     []TUNInbound        `json:"inbounds"`
+	Outbounds    []Outbound          `json:"outbounds"`
+	Route        RouteConfig         `json:"route"`
+}
+
+type ExperimentalConfig struct {
+	ClashAPI *ClashAPIConfig `json:"clash_api,omitempty"`
+}
+type ClashAPIConfig struct {
+	ExternalController string `json:"external_controller"`
+	Secret             string `json:"secret,omitempty"`
 }
 
 type RuleSet struct {

@@ -52,6 +52,17 @@ func TestGeneratedMVPPassesLockedSingBoxCheck(t *testing.T) {
 	}
 }
 
+func TestGeneratedConnectionObservationPassesLockedSingBoxCheck(t *testing.T) {
+	input := fixtureInput(t)
+	input.ConnectionObservation = true
+	input.ConnectionAPISecret = "integration-test-secret"
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	if _, _, err := ValidateMVPWithCore(ctx, input, filepath.Join("..", "..", "resources", "core", "sing-box.exe")); err != nil {
+		t.Fatalf("locked core rejected connection observation: %v", err)
+	}
+}
+
 func TestLockedCoreAcceptsWindowsProcessMatchers(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping locked core process matcher check")

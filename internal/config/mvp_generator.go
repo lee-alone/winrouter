@@ -264,6 +264,13 @@ func GenerateMVP(input MVPConfig) (Generated, error) {
 		Outbounds: outbounds,
 		Route:     RouteConfig{AutoDetectInterface: false, DefaultDNSResolver: "dns-global", RuleSets: routeRuleSets, Rules: make([]RouteRule, 0, len(rules)+len(input.RuleSets)), Final: finalOutbound},
 	}
+	if input.ConnectionObservation {
+		secret := strings.TrimSpace(input.ConnectionAPISecret)
+		if secret == "" {
+			return Generated{}, fmt.Errorf("connection observation API secret is required when enabled")
+		}
+		model.Experimental = &ExperimentalConfig{ClashAPI: &ClashAPIConfig{ExternalController: "127.0.0.1:19090", Secret: secret}}
+	}
 	categories := make([]string, 0, len(rules))
 	for _, rule := range rules {
 		model.Route.Rules = append(model.Route.Rules, RouteRule{Protocol: rule.Protocol, IPCIDR: rule.CIDRs, DomainSuffix: rule.Domains, IPVersion: rule.IPVersion, ProcessName: rule.ProcessName, ProcessPath: rule.ProcessPath, Action: rule.Action, Outbound: rule.Outbound})

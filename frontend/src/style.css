@@ -155,6 +155,9 @@ input { width: 100%; min-height: 42px; padding: 8px 10px; border: 1px solid #aeb
 .traffic-axis { padding-top: 7px; }
 .monitor-notes { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 28px; padding: 22px 0; }
 .monitor-notes div { display: grid; gap: 5px; }
+.connection-table { margin-top: 16px; overflow-x: auto; border-top: 1px solid #d5ddda; }
+.connection-row { display: grid; grid-template-columns: minmax(210px, 2fr) 90px minmax(130px, 1fr) minmax(130px, 1fr) 90px minmax(160px, 1fr); gap: 12px; align-items: center; min-width: 900px; padding: 11px 0; border-bottom: 1px solid #d5ddda; font-size: 13px; }
+.connection-row > span { min-width: 0; overflow-wrap: anywhere; }.connection-row > span:first-child { display: grid; gap: 3px; }.connection-row small { color: #68777a; }.connection-head { color: #68777a; font-size: 12px; font-weight: 600; }
 .proxy-heading { display: flex; align-items: center; justify-content: space-between; gap: 24px; padding: 24px 0; border-bottom: 1px solid #d5ddda; }
 .proxy-risks { display: grid; gap: 7px; margin-top: 20px; padding: 14px; border-left: 3px solid #b7832f; background: #fbf4e5; }.proxy-risks div { display: flex; gap: 12px; font-size: 13px; }.proxy-risks strong { color: #815718; }.proxy-risks small { color: #68777a; }
 .proxy-heading p:not(.section-kicker) { margin: 0; color: #657478; line-height: 1.6; }

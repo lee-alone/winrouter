@@ -50,6 +50,10 @@ export function GetAutostartStatus() {
   return window['go']['main']['App']['GetAutostartStatus']();
 }
 
+export function GetConnectionObservationEnabled() {
+  return window['go']['main']['App']['GetConnectionObservationEnabled']();
+}
+
 export function GetCoreStatus() {
   return window['go']['main']['App']['GetCoreStatus']();
 }
@@ -156,6 +160,10 @@ export function SelectProxyNode(arg1) {
 
 export function SetAutostartEnabled(arg1) {
   return window['go']['main']['App']['SetAutostartEnabled'](arg1);
+}
+
+export function SetConnectionObservationEnabled(arg1) {
+  return window['go']['main']['App']['SetConnectionObservationEnabled'](arg1);
 }
 
 export function SetDNSSettings(arg1) {

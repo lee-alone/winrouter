@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -17,6 +19,7 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 	"winrouter/internal/autostart"
 	"winrouter/internal/buildinfo"
+	"winrouter/internal/clashapi"
 	"winrouter/internal/config"
 	"winrouter/internal/core"
 	"winrouter/internal/dnssettings"
@@ -36,29 +39,31 @@ import (
 )
 
 type App struct {
-	ctx                context.Context
-	mu                 sync.RWMutex
-	interfaceManager   *interfacemanager.Manager
-	interfaceError     error
-	nodeStore          *nodes.Store
-	nodeError          error
-	subscriptions      *subscriptions.Manager
-	ruleSets           *rulesets.Manager
-	ruleSetError       error
-	srsSets            *srssets.Manager
-	srsSetError        error
-	trafficBudget      *trafficbudget.Manager
-	trafficBudgetError error
-	dnsSettings        *dnssettings.Manager
-	dnsSettingsError   error
-	subscriptionError  error
-	helperSession      *helperclient.Session
-	observations       *observability.Store
-	recovery           *recovery.Coordinator
-	lastConfig         *config.MVPConfig
-	tray               apptray.Controller
-	exiting            atomic.Bool
-	windowVisible      atomic.Bool
+	ctx                   context.Context
+	mu                    sync.RWMutex
+	interfaceManager      *interfacemanager.Manager
+	interfaceError        error
+	nodeStore             *nodes.Store
+	nodeError             error
+	subscriptions         *subscriptions.Manager
+	ruleSets              *rulesets.Manager
+	ruleSetError          error
+	srsSets               *srssets.Manager
+	srsSetError           error
+	trafficBudget         *trafficbudget.Manager
+	trafficBudgetError    error
+	dnsSettings           *dnssettings.Manager
+	dnsSettingsError      error
+	subscriptionError     error
+	helperSession         *helperclient.Session
+	observations          *observability.Store
+	recovery              *recovery.Coordinator
+	lastConfig            *config.MVPConfig
+	tray                  apptray.Controller
+	exiting               atomic.Bool
+	windowVisible         atomic.Bool
+	connectionObservation atomic.Bool
+	connectionAPISecret   string
 }
 
 type ApplicationStatus struct {
@@ -707,6 +712,7 @@ func findAdapter(adapters []interfaces.Adapter, guid string) (interfaces.Adapter
 }
 
 func (a *App) ValidateCoreConfiguration(input config.MVPConfig) error {
+	a.applyConnectionObservation(&input)
 	var err error
 	input, err = a.withDNSSettings(input)
 	if err != nil {
@@ -751,6 +757,7 @@ func (a *App) ValidateCoreConfiguration(input config.MVPConfig) error {
 }
 
 func (a *App) ApplyCoreConfiguration(input config.MVPConfig) (core.Status, error) {
+	a.applyConnectionObservation(&input)
 	var err error
 	input, err = a.withDNSSettings(input)
 	if err != nil {
@@ -1076,13 +1083,15 @@ func trayStatusLabel(status recovery.Status) string {
 }
 
 type ObservationSnapshot struct {
-	Logs          []observability.LogEntry         `json:"logs"`
-	Probes        []observability.ProbeResult      `json:"probes"`
-	Counters      []observability.InterfaceCounter `json:"counters"`
-	RuleSets      []observability.RuleSetMetadata  `json:"rule_sets"`
-	Connections   observability.ConnectionSummary  `json:"connections"`
-	RuleHits      []observability.RuleHit          `json:"rule_hits"`
-	TrafficBudget trafficbudget.Status             `json:"traffic_budget"`
+	Logs                  []observability.LogEntry         `json:"logs"`
+	Probes                []observability.ProbeResult      `json:"probes"`
+	Counters              []observability.InterfaceCounter `json:"counters"`
+	RuleSets              []observability.RuleSetMetadata  `json:"rule_sets"`
+	Connections           observability.ConnectionSummary  `json:"connections"`
+	RuleHits              []observability.RuleHit          `json:"rule_hits"`
+	ConnectionObservation bool                             `json:"connection_observation"`
+	ConnectionEvents      []clashapi.Summary               `json:"connection_events"`
+	TrafficBudget         trafficbudget.Status             `json:"traffic_budget"`
 }
 
 func (a *App) GetObservations() (ObservationSnapshot, error) {
@@ -1123,7 +1132,56 @@ func (a *App) GetObservations() (ObservationSnapshot, error) {
 			}
 		}
 	}
-	return ObservationSnapshot{Logs: a.observations.Logs(), Probes: a.observations.Probes(), Counters: counters, RuleSets: a.observations.RuleSets(), Connections: connections, RuleHits: observability.ParseRuleHits(coreStatus.CoreLog), TrafficBudget: budgetStatus}, nil
+	events := []clashapi.Summary(nil)
+	if a.connectionObservation.Load() && coreStatus.State == "running" {
+		a.mu.RLock()
+		secret := a.connectionAPISecret
+		a.mu.RUnlock()
+		ctx, cancel := context.WithTimeout(a.ctx, 2*time.Second)
+		result, connectionErr := (clashapi.Client{BaseURL: "http://127.0.0.1:19090", Secret: secret}).ListConnections(ctx)
+		cancel()
+		if connectionErr == nil {
+			events = clashapi.Aggregate(result.Connections)
+		}
+	}
+	return ObservationSnapshot{Logs: a.observations.Logs(), Probes: a.observations.Probes(), Counters: counters, RuleSets: a.observations.RuleSets(), Connections: connections, RuleHits: observability.ParseRuleHits(coreStatus.CoreLog), ConnectionObservation: a.connectionObservation.Load(), ConnectionEvents: events, TrafficBudget: budgetStatus}, nil
+}
+
+func (a *App) SetConnectionObservationEnabled(enabled bool) error {
+	status, err := a.GetCoreStatus()
+	if err != nil {
+		return err
+	}
+	if status.State == "running" {
+		return errors.New("stop routing before changing connection observation")
+	}
+	if enabled {
+		a.mu.Lock()
+		if a.connectionAPISecret == "" {
+			data := make([]byte, 32)
+			if _, err := rand.Read(data); err != nil {
+				a.mu.Unlock()
+				return err
+			}
+			a.connectionAPISecret = hex.EncodeToString(data)
+		}
+		a.mu.Unlock()
+	}
+	a.connectionObservation.Store(enabled)
+	return nil
+}
+
+func (a *App) GetConnectionObservationEnabled() bool { return a.connectionObservation.Load() }
+
+func (a *App) applyConnectionObservation(input *config.MVPConfig) {
+	input.ConnectionObservation = a.connectionObservation.Load()
+	if input.ConnectionObservation {
+		a.mu.RLock()
+		input.ConnectionAPISecret = a.connectionAPISecret
+		a.mu.RUnlock()
+	} else {
+		input.ConnectionAPISecret = ""
+	}
 }
 
 func (a *App) GetTrafficBudgetStatus() trafficbudget.Status {

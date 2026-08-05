@@ -68,6 +68,27 @@ func TestGenerateMVPIsDeterministic(t *testing.T) {
 	}
 }
 
+func TestGenerateMVPConnectionObservationOmitsDeprecatedStoreMode(t *testing.T) {
+	input := fixtureInput(t)
+	input.ConnectionObservation = true
+	input.ConnectionAPISecret = "test-secret"
+	generated, err := GenerateMVP(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if generated.Model.Experimental == nil || generated.Model.Experimental.ClashAPI == nil {
+		t.Fatalf("clash api configuration = %#v", generated.Model.Experimental)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(generated.JSON, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	clashAPI := decoded["experimental"].(map[string]any)["clash_api"].(map[string]any)
+	if _, exists := clashAPI["store_mode"]; exists {
+		t.Fatal("deprecated store_mode must not be generated")
+	}
+}
+
 func TestGenerateMVPSplitIPv6OmitsBlockRules(t *testing.T) {
 	input := fixtureInput(t)
 	input.IPv6 = IPv6Split
