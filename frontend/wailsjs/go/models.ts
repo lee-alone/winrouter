@@ -1384,65 +1384,13 @@ export namespace routes {
 
 }
 
-export namespace rulesets {
-	
-	export class Source {
-	    name: string;
-	    url: string;
-	    expected_sha256: string;
-	    applied_sha256?: string;
-	    version?: string;
-	    rule_count: number;
-	    size: number;
-	    // Go type: time
-	    updated_at?: any;
-	    last_error?: string;
-	
-	    static createFrom(source: any = {}) {
-	        return new Source(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.name = source["name"];
-	        this.url = source["url"];
-	        this.expected_sha256 = source["expected_sha256"];
-	        this.applied_sha256 = source["applied_sha256"];
-	        this.version = source["version"];
-	        this.rule_count = source["rule_count"];
-	        this.size = source["size"];
-	        this.updated_at = this.convertValues(source["updated_at"], null);
-	        this.last_error = source["last_error"];
-	    }
-	
-		convertValues(a: any, classs: any, asMap: boolean = false): any {
-		    if (!a) {
-		        return a;
-		    }
-		    if (a.slice && a.map) {
-		        return (a as any[]).map(elem => this.convertValues(elem, classs));
-		    } else if ("object" === typeof a) {
-		        if (asMap) {
-		            for (const key of Object.keys(a)) {
-		                a[key] = new classs(a[key]);
-		            }
-		            return a;
-		        }
-		        return new classs(a);
-		    }
-		    return a;
-		}
-	}
-
-}
-
 export namespace rulesettings {
 	
 	export class Rule {
 	    id: string;
 	    name: string;
 	    type: string;
-	    value: string;
+	    values: string[];
 	    action: string;
 	    enabled: boolean;
 	
@@ -1455,7 +1403,7 @@ export namespace rulesettings {
 	        this.id = source["id"];
 	        this.name = source["name"];
 	        this.type = source["type"];
-	        this.value = source["value"];
+	        this.values = source["values"];
 	        this.action = source["action"];
 	        this.enabled = source["enabled"];
 	    }
@@ -1463,7 +1411,6 @@ export namespace rulesettings {
 	export class Settings {
 	    schema_version: number;
 	    initialized: boolean;
-	    legacy_remote_migrated?: boolean;
 	    default_outbound: string;
 	    rules: Rule[];
 	    rule_order: string[];
@@ -1476,7 +1423,6 @@ export namespace rulesettings {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.schema_version = source["schema_version"];
 	        this.initialized = source["initialized"];
-	        this.legacy_remote_migrated = source["legacy_remote_migrated"];
 	        this.default_outbound = source["default_outbound"];
 	        this.rules = this.convertValues(source["rules"], Rule);
 	        this.rule_order = source["rule_order"];

@@ -1,6 +1,7 @@
 package rulesettings
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,26 +13,25 @@ import (
 	"sync"
 )
 
-const SchemaVersion = 1
+const SchemaVersion = 2
 
 var ruleIDPattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9:_-]{0,127}$`)
 
 type Rule struct {
-	ID      string `json:"id"`
-	Name    string `json:"name"`
-	Type    string `json:"type"`
-	Value   string `json:"value"`
-	Action  string `json:"action"`
-	Enabled bool   `json:"enabled"`
+	ID      string   `json:"id"`
+	Name    string   `json:"name"`
+	Type    string   `json:"type"`
+	Values  []string `json:"values"`
+	Action  string   `json:"action"`
+	Enabled bool     `json:"enabled"`
 }
 
 type Settings struct {
-	SchemaVersion        int      `json:"schema_version"`
-	Initialized          bool     `json:"initialized"`
-	LegacyRemoteMigrated bool     `json:"legacy_remote_migrated,omitempty"`
-	DefaultOutbound      string   `json:"default_outbound"`
-	Rules                []Rule   `json:"rules"`
-	RuleOrder            []string `json:"rule_order"`
+	SchemaVersion   int      `json:"schema_version"`
+	Initialized     bool     `json:"initialized"`
+	DefaultOutbound string   `json:"default_outbound"`
+	Rules           []Rule   `json:"rules"`
+	RuleOrder       []string `json:"rule_order"`
 }
 
 func Defaults() Settings {
@@ -56,8 +56,23 @@ func New(path string) (*Manager, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read rule settings: %w", err)
 	}
+	var envelope struct {
+		Rules []struct {
+			Value json.RawMessage `json:"value"`
+		} `json:"rules"`
+	}
+	if err := json.Unmarshal(data, &envelope); err != nil {
+		return nil, fmt.Errorf("decode rule settings: %w", err)
+	}
+	for _, rule := range envelope.Rules {
+		if len(rule.Value) > 0 && string(rule.Value) != "null" {
+			return nil, errors.New("legacy rule settings format is unsupported; use schema_version 2 with values")
+		}
+	}
 	var stored Settings
-	if err := json.Unmarshal(data, &stored); err != nil {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&stored); err != nil {
 		return nil, fmt.Errorf("decode rule settings: %w", err)
 	}
 	if err := Validate(stored); err != nil {
@@ -79,30 +94,18 @@ func (m *Manager) Configure(value Settings) (Settings, error) {
 	return m.configureLocked(value)
 }
 
-func (m *Manager) MigrateLegacyRemote(imported []Rule) (Settings, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.settings.LegacyRemoteMigrated {
-		return clone(m.settings), nil
-	}
-	if len(imported) == 0 {
-		return Settings{}, errors.New("verified legacy remote rules are required")
-	}
-	if len(m.settings.Rules)+len(imported) > 200 {
-		return Settings{}, fmt.Errorf("legacy remote migration would exceed the limit of 200 rules (%d existing + %d imported)", len(m.settings.Rules), len(imported))
-	}
-	next := clone(m.settings)
-	next.Rules = append(next.Rules, imported...)
-	for _, rule := range imported {
-		next.RuleOrder = append(next.RuleOrder, rule.ID)
-	}
-	next.LegacyRemoteMigrated = true
-	return m.configureLocked(next)
-}
-
 func (m *Manager) configureLocked(value Settings) (Settings, error) {
 	value.SchemaVersion = SchemaVersion
 	value.Initialized = true
+	for ruleIndex := range value.Rules {
+		for valueIndex, raw := range value.Rules[ruleIndex].Values {
+			normalized, err := normalizeValue(value.Rules[ruleIndex].Type, raw)
+			if err != nil {
+				return Settings{}, fmt.Errorf("rule %q: %w", value.Rules[ruleIndex].ID, err)
+			}
+			value.Rules[ruleIndex].Values[valueIndex] = normalized
+		}
+	}
 	if err := Validate(value); err != nil {
 		return Settings{}, err
 	}
@@ -157,11 +160,11 @@ func Validate(value Settings) error {
 			return fmt.Errorf("duplicate rule id %q", rule.ID)
 		}
 		ids[rule.ID] = struct{}{}
-		if strings.TrimSpace(rule.Name) == "" || len([]rune(rule.Name)) > 80 || strings.TrimSpace(rule.Value) == "" {
-			return fmt.Errorf("rule %q requires a name and value", rule.ID)
+		if strings.TrimSpace(rule.Name) == "" || len([]rune(rule.Name)) > 80 || len(rule.Values) == 0 {
+			return fmt.Errorf("rule %q requires a name and at least one value", rule.ID)
 		}
 		switch rule.Type {
-		case "domain", "ip", "process-name", "process-path":
+		case "domain", "domain-suffix", "ip", "process-name", "process-path":
 		default:
 			return fmt.Errorf("rule %q has unsupported type %q", rule.ID, rule.Type)
 		}
@@ -170,15 +173,22 @@ func Validate(value Settings) error {
 		default:
 			return fmt.Errorf("rule %q has unsupported action %q", rule.ID, rule.Action)
 		}
-		matchKey, err := normalizedMatchKey(rule)
-		if err != nil {
-			return fmt.Errorf("rule %q: %w", rule.ID, err)
-		}
-		if rule.Enabled {
-			if previous, exists := matches[matchKey]; exists && previous != rule.Action {
-				return fmt.Errorf("rule %q has conflicting actions for %q", rule.ID, rule.Value)
+		seenValues := make(map[string]struct{}, len(rule.Values))
+		for _, value := range rule.Values {
+			matchKey, err := normalizedMatchKey(rule.Type, value)
+			if err != nil {
+				return fmt.Errorf("rule %q: %w", rule.ID, err)
 			}
-			matches[matchKey] = rule.Action
+			if _, exists := seenValues[matchKey]; exists {
+				return fmt.Errorf("rule %q contains duplicate value %q", rule.ID, value)
+			}
+			seenValues[matchKey] = struct{}{}
+			if rule.Enabled {
+				if previous, exists := matches[matchKey]; exists && previous != rule.Action {
+					return fmt.Errorf("rule %q has conflicting actions for %q", rule.ID, value)
+				}
+				matches[matchKey] = rule.Action
+			}
 		}
 	}
 	if len(value.RuleOrder) > 1000 {
@@ -197,10 +207,20 @@ func Validate(value Settings) error {
 	return nil
 }
 
-func normalizedMatchKey(rule Rule) (string, error) {
-	value := strings.TrimSpace(rule.Value)
-	switch rule.Type {
+func normalizedMatchKey(ruleType, raw string) (string, error) {
+	value, err := normalizeValue(ruleType, raw)
+	if err != nil {
+		return "", err
+	}
+	return ruleType + ":" + value, nil
+}
+
+func normalizeValue(ruleType, raw string) (string, error) {
+	value := strings.TrimSpace(raw)
+	switch ruleType {
 	case "domain":
+		fallthrough
+	case "domain-suffix":
 		value = strings.ToLower(strings.Trim(value, "."))
 		if value == "" || strings.ContainsAny(value, " /\\") {
 			return "", errors.New("invalid domain suffix")
@@ -218,13 +238,19 @@ func normalizedMatchKey(rule Rule) (string, error) {
 		}
 	case "process-path":
 		value = strings.ToLower(value)
+		if value == "" {
+			return "", errors.New("invalid process path")
+		}
 	}
-	return rule.Type + ":" + value, nil
+	return value, nil
 }
 
 func clone(value Settings) Settings {
 	// Keep empty collections non-nil so Wails exposes [] instead of null.
 	value.Rules = append([]Rule{}, value.Rules...)
+	for i := range value.Rules {
+		value.Rules[i].Values = append([]string{}, value.Rules[i].Values...)
+	}
 	value.RuleOrder = append([]string{}, value.RuleOrder...)
 	return value
 }

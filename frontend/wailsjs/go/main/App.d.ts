@@ -5,7 +5,6 @@ import {subscriptions} from '../models';
 import {config} from '../models';
 import {core} from '../models';
 import {context} from '../models';
-import {rulesets} from '../models';
 import {srssets} from '../models';
 import {autostart} from '../models';
 import {dnssettings} from '../models';
@@ -26,8 +25,6 @@ export function ApplyCoreConfiguration(arg1:config.MVPConfig):Promise<core.Statu
 export function ApplySelectedProxyConfiguration(arg1:config.MVPConfig):Promise<core.Status>;
 
 export function BeforeClose(arg1:context.Context):Promise<boolean>;
-
-export function ConfigureRemoteRuleSet(arg1:rulesets.Source):Promise<rulesets.Source>;
 
 export function ConfigureSRSSource(arg1:srssets.Source):Promise<srssets.Source>;
 
@@ -59,8 +56,6 @@ export function GetObservations():Promise<main.ObservationSnapshot>;
 
 export function GetRecoveryStatus():Promise<recovery.Status>;
 
-export function GetRemoteRuleSet():Promise<rulesets.Source>;
-
 export function GetRuleSettings():Promise<rulesettings.Settings>;
 
 export function GetSRSPresets():Promise<Array<srssets.Preset>>;
@@ -77,15 +72,11 @@ export function ListSRSSources():Promise<Array<srssets.Source>>;
 
 export function ListSubscriptions():Promise<Array<subscriptions.Subscription>>;
 
-export function MigrateRemoteRuleSet():Promise<rulesettings.Settings>;
-
 export function PreviewCoreRules(arg1:config.MVPConfig):Promise<Array<config.RulePreview>>;
 
 export function PreviewDiagnosticBundle():Promise<observability.BundlePreview>;
 
 export function RecordApplicationLog(arg1:string,arg2:string,arg3:string):Promise<void>;
-
-export function RefreshRemoteRuleSet():Promise<rulesets.Source>;
 
 export function RefreshSRSSource(arg1:string):Promise<srssets.Source>;
 

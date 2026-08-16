@@ -22,10 +22,6 @@ export function BeforeClose(arg1) {
   return window['go']['main']['App']['BeforeClose'](arg1);
 }
 
-export function ConfigureRemoteRuleSet(arg1) {
-  return window['go']['main']['App']['ConfigureRemoteRuleSet'](arg1);
-}
-
 export function ConfigureSRSSource(arg1) {
   return window['go']['main']['App']['ConfigureSRSSource'](arg1);
 }
@@ -86,10 +82,6 @@ export function GetRecoveryStatus() {
   return window['go']['main']['App']['GetRecoveryStatus']();
 }
 
-export function GetRemoteRuleSet() {
-  return window['go']['main']['App']['GetRemoteRuleSet']();
-}
-
 export function GetRuleSettings() {
   return window['go']['main']['App']['GetRuleSettings']();
 }
@@ -122,10 +114,6 @@ export function ListSubscriptions() {
   return window['go']['main']['App']['ListSubscriptions']();
 }
 
-export function MigrateRemoteRuleSet() {
-  return window['go']['main']['App']['MigrateRemoteRuleSet']();
-}
-
 export function PreviewCoreRules(arg1) {
   return window['go']['main']['App']['PreviewCoreRules'](arg1);
 }
@@ -136,10 +124,6 @@ export function PreviewDiagnosticBundle() {
 
 export function RecordApplicationLog(arg1, arg2, arg3) {
   return window['go']['main']['App']['RecordApplicationLog'](arg1, arg2, arg3);
-}
-
-export function RefreshRemoteRuleSet() {
-  return window['go']['main']['App']['RefreshRemoteRuleSet']();
 }
 
 export function RefreshSRSSource(arg1) {

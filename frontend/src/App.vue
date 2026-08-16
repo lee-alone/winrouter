@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
-import { AddProxyNode, AddSubscription, ApplyCoreConfiguration, ApplySelectedProxyConfiguration, ConfigureRemoteRuleSet, ConfigureSRSSource, DeleteProxyNode, DeleteSRSSource, DeleteSubscription, ExportDiagnosticBundle, GetApplicationConfigDirectory, GetAutostartStatus, GetConnectionObservationEnabled, GetCoreStatus, GetDNSPresets, GetDNSSettings, GetInterfaceSnapshot, GetIPv6Policy, GetObservations, GetRecoveryStatus, GetRemoteRuleSet, GetRuleSettings, GetSRSPresets, GetStatus, GetTrafficBudgetStatus, InspectProcessRules, ListProxyNodes, ListSRSSources, ListSubscriptions, MigrateRemoteRuleSet, PreviewCoreRules, PreviewDiagnosticBundle, RecordApplicationLog, RefreshRemoteRuleSet, RefreshSRSSource, RefreshSubscription, RepairApplicationSettings, ResetApplicationSettings, ResetInterfaceSelection, ResetTrafficBudget, ResetWindowsNetworkStack, RunHealthProbe, SelectInterfaces, SelectProxyNode, SetAutostartEnabled, SetConnectionObservationEnabled, SetDNSSettings, SetIPv6Policy, SetProxyNodeFavorite, SetRuleSettings, SetTrafficBudget, SpeedTestProxyNodes, StopCore, TestDNSServer, TestProxyNode, UpdateProxyNode, UpdateSubscription, ValidateCoreConfiguration, ValidateSelectedProxyConfiguration } from '../wailsjs/go/main/App'
-import type { config, core, interfacemanager, interfaces, main, nodes, observability, processrules, rulesets, rulesettings, srssets, subscriptions } from '../wailsjs/go/models'
+import { AddProxyNode, AddSubscription, ApplyCoreConfiguration, ApplySelectedProxyConfiguration, ConfigureSRSSource, DeleteProxyNode, DeleteSRSSource, DeleteSubscription, ExportDiagnosticBundle, GetApplicationConfigDirectory, GetAutostartStatus, GetConnectionObservationEnabled, GetCoreStatus, GetDNSPresets, GetDNSSettings, GetInterfaceSnapshot, GetIPv6Policy, GetObservations, GetRecoveryStatus, GetRuleSettings, GetSRSPresets, GetStatus, GetTrafficBudgetStatus, InspectProcessRules, ListProxyNodes, ListSRSSources, ListSubscriptions, PreviewCoreRules, PreviewDiagnosticBundle, RecordApplicationLog, RefreshSRSSource, RefreshSubscription, RepairApplicationSettings, ResetApplicationSettings, ResetInterfaceSelection, ResetTrafficBudget, ResetWindowsNetworkStack, RunHealthProbe, SelectInterfaces, SelectProxyNode, SetAutostartEnabled, SetConnectionObservationEnabled, SetDNSSettings, SetIPv6Policy, SetProxyNodeFavorite, SetRuleSettings, SetTrafficBudget, SpeedTestProxyNodes, StopCore, TestDNSServer, TestProxyNode, UpdateProxyNode, UpdateSubscription, ValidateCoreConfiguration, ValidateSelectedProxyConfiguration } from '../wailsjs/go/main/App'
+import type { config, core, interfacemanager, interfaces, main, nodes, observability, processrules, rulesettings, srssets, subscriptions } from '../wailsjs/go/models'
 import { EventsOn } from '../wailsjs/runtime/runtime'
 import type { ApplicationStatus } from './vite-env'
 import { locale, setLocale, t, type Locale } from './i18n'
@@ -78,21 +78,17 @@ const subscriptionList = ref<subscriptions.Subscription[]>([])
 const subscriptionFormOpen = ref(false)
 const subscriptionForm = ref({ id: '', name: '', url: '' })
 const refreshingSubscriptionID = ref('')
-type InlineRuleType = 'domain' | 'ip' | 'process-name' | 'process-path'
+type InlineRuleType = 'domain-suffix' | 'domain' | 'ip' | 'process-name' | 'process-path'
 type RuleAction = 'a' | 'b' | 'final' | 'reject'
-type CustomRule = { id: string; name: string; type: InlineRuleType; value: string; action: RuleAction; enabled: boolean }
-type RuleForm = { id: string; name: string; type: InlineRuleType | 'rule-set'; value: string; action: RuleAction; enabled: boolean }
+type CustomRule = { id: string; name: string; type: InlineRuleType; values: string[]; action: RuleAction; enabled: boolean }
+type RuleForm = { id: string; name: string; type: InlineRuleType | 'rule-set'; valuesText: string; action: RuleAction; enabled: boolean }
 const customRules = ref<CustomRule[]>([])
 const ruleOrder = ref<string[]>([])
 const ruleFormOpen = ref(false)
-const ruleForm = ref<RuleForm>({ id: '', name: '', type: 'domain', value: '', action: 'a', enabled: true })
+const ruleForm = ref<RuleForm>({ id: '', name: '', type: 'domain-suffix', valuesText: '', action: 'a', enabled: true })
 const rulePreview = ref<config.RulePreview[]>([])
 const rulePreviewError = ref('')
 const processRuleStatuses = ref<processrules.Status[]>([])
-const remoteRuleSet = ref<rulesets.Source>()
-const remoteRuleForm = ref({ name: '', url: '', expected_sha256: '' })
-const remoteRuleBusy = ref(false)
-const legacyRemoteMigrated = ref(false)
 const srsPresets = ref<srssets.Preset[]>([])
 const srsSources = ref<srssets.Source[]>([])
 const srsBusyID = ref('')
@@ -205,12 +201,6 @@ function messageOf(reason: unknown): string {
   return reason instanceof Error ? reason.message : String(reason)
 }
 
-function formatRuleSetTime(value?: string): string {
-  if (!value) return '尚未成功更新'
-  const parsed = new Date(value)
-  return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleString('zh-CN', { hour12: false })
-}
-
 function resetSRSForm() {
   srsForm.value = { id: '', name: '', kind: 'domain', preset_id: '', url: '', expected_sha256: '', enabled: true, action: 'a' }
 }
@@ -227,7 +217,7 @@ function chooseSRSPreset() {
 
 function editSRSSource(source: srssets.Source) {
   srsForm.value = { id: source.id, name: source.name, kind: source.kind, preset_id: source.preset_id || '', url: source.url, expected_sha256: source.expected_sha256 || '', enabled: source.enabled, action: source.action }
-  ruleForm.value = { id: source.id, name: source.name, type: 'rule-set', value: '', action: source.action as RuleAction, enabled: source.enabled }
+  ruleForm.value = { id: source.id, name: source.name, type: 'rule-set', valuesText: '', action: source.action as RuleAction, enabled: source.enabled }
   ruleFormOpen.value = true
 }
 
@@ -238,9 +228,10 @@ async function submitSRSSource() {
     const key = `srs:${configured.id}`
     if (!ruleOrder.value.includes(key)) ruleOrder.value.push(key)
     srsSources.value = await ListSRSSources()
-    void saveRuleSettings()
+    await saveRuleSettings()
     notice.value = '规则集已保存。下载并验证成功前不会参与分流。'
     resetRuleForm()
+    await refreshRulePreview()
   } catch (reason) { error.value = `无法保存 SRS 来源：${messageOf(reason)}` }
   finally { srsBusyID.value = '' }
 }
@@ -258,13 +249,14 @@ async function toggleSRSSource(source: srssets.Source) {
     await ConfigureSRSSource({ ...source, enabled: !source.enabled } as srssets.Source)
     srsSources.value = await ListSRSSources()
     notice.value = `${source.name} 已${source.enabled ? '停用' : '启用'}。`
+    await refreshRulePreview()
   } catch (reason) { error.value = `无法更新规则状态：${messageOf(reason)}` }
   finally { srsBusyID.value = '' }
 }
 
 async function deleteSRSSource(source: srssets.Source) {
   if (!window.confirm(`删除 SRS 来源“${source.name}”？`)) return
-  try { await DeleteSRSSource(source.id); srsSources.value = await ListSRSSources(); ruleOrder.value = ruleOrder.value.filter(key => key !== `srs:${source.id}`); await saveRuleSettings(); notice.value = '自定义规则集已删除。' }
+  try { await DeleteSRSSource(source.id); srsSources.value = await ListSRSSources(); ruleOrder.value = ruleOrder.value.filter(key => key !== `srs:${source.id}`); await saveRuleSettings(); await refreshRulePreview(); notice.value = '自定义规则集已删除。' }
   catch (reason) { error.value = `无法删除 SRS 来源：${messageOf(reason)}` }
 }
 
@@ -378,11 +370,10 @@ function recommendationActionText(action: DiagnosticRecommendation['action']) {
 
 function saveRuleSettings(): Promise<void> {
   const snapshot = {
-    schema_version: 1,
+    schema_version: 2,
     initialized: true,
-    legacy_remote_migrated: legacyRemoteMigrated.value,
     default_outbound: defaultOutbound.value,
-    rules: customRules.value.map(rule => ({ ...rule })),
+    rules: customRules.value.map(rule => ({ id: rule.id, name: rule.name, type: rule.type, values: rule.values, action: rule.action, enabled: rule.enabled })),
     rule_order: [...ruleOrder.value],
   } as rulesettings.Settings
   ruleSettingsSave = ruleSettingsSave.then(async () => {
@@ -401,13 +392,13 @@ async function flushRuleSettings(): Promise<void> {
 }
 
 function resetRuleForm() {
-  ruleForm.value = { id: '', name: '', type: 'domain', value: '', action: 'a', enabled: true }
+  ruleForm.value = { id: '', name: '', type: 'domain-suffix', valuesText: '', action: 'a', enabled: true }
   resetSRSForm()
   ruleFormOpen.value = false
 }
 
 function editCustomRule(rule: CustomRule) {
-  ruleForm.value = { ...rule }
+  ruleForm.value = { ...rule, valuesText: rule.values.join('\n') }
   ruleFormOpen.value = true
 }
 
@@ -419,12 +410,12 @@ function moveMasterRule(key: string, direction: -1 | 1) {
   const [item] = next.splice(index, 1)
   next.splice(target, 0, item)
   ruleOrder.value = next
-  void saveRuleSettings()
+  void saveRuleSettings().then(refreshRulePreview)
 }
 
 function toggleCustomRule(rule: CustomRule) {
   rule.enabled = !rule.enabled
-  void saveRuleSettings()
+  void saveRuleSettings().then(refreshRulePreview)
 }
 
 async function submitRule() {
@@ -432,61 +423,42 @@ async function submitRule() {
     await submitSRSSource()
     return
   }
-  const next: CustomRule = { ...ruleForm.value, type: ruleForm.value.type as InlineRuleType, id: ruleForm.value.id || crypto.randomUUID() }
+  const type = ruleForm.value.type as InlineRuleType
+  const values = ruleForm.value.valuesText.split(/\r?\n/).map(value => normalizeRuleValue(type, value)).filter(Boolean)
+  if (!values.length) throw new Error('至少填写一个匹配值')
+  const next: CustomRule = { id: ruleForm.value.id || crypto.randomUUID(), name: ruleForm.value.name, type, values: [...new Set(values)], action: ruleForm.value.action, enabled: ruleForm.value.enabled }
   const index = customRules.value.findIndex(rule => rule.id === next.id)
   next.enabled = next.enabled !== false
   if (index >= 0) customRules.value[index] = next
   else customRules.value.push(next)
   if (!ruleOrder.value.includes(next.id)) ruleOrder.value.push(next.id)
-  void saveRuleSettings()
+  await saveRuleSettings()
   resetRuleForm()
+  await refreshRulePreview()
 }
 
-function deleteCustomRule(id: string) {
+async function deleteCustomRule(id: string) {
   customRules.value = customRules.value.filter(rule => rule.id !== id)
   ruleOrder.value = ruleOrder.value.filter(key => key !== id)
-  void saveRuleSettings()
+  await saveRuleSettings()
+  await refreshRulePreview()
 }
 
 function ruleTypeText(type: InlineRuleType) {
-  return ({ domain: '域名', ip: 'IP/CIDR', 'process-name': '进程', 'process-path': '进程路径' } as Record<InlineRuleType, string>)[type]
+  return ({ 'domain-suffix': '域名后缀', domain: '精确域名', ip: 'IP/CIDR', 'process-name': '进程', 'process-path': '进程路径' } as Record<InlineRuleType, string>)[type]
+}
+
+function normalizeRuleValue(type: InlineRuleType, raw: string) {
+  const value = raw.trim()
+  if (type === 'domain' || type === 'domain-suffix') return value.toLowerCase().replace(/^\.+|\.+$/g, '')
+  if (type === 'process-name' || type === 'process-path') return value.toLowerCase()
+  return value
 }
 
 async function refreshRulePreview() {
   rulePreviewError.value = ''
   try { await flushRuleSettings(); const input = buildConfig(); rulePreview.value = await PreviewCoreRules(input); processRuleStatuses.value = await InspectProcessRules(input) }
   catch (reason) { rulePreview.value = []; processRuleStatuses.value = []; rulePreviewError.value = messageOf(reason) }
-}
-
-async function configureRemoteRules() {
-  remoteRuleBusy.value = true; error.value = ''; notice.value = ''
-  try {
-    remoteRuleSet.value = await ConfigureRemoteRuleSet({ ...remoteRuleForm.value, applied_sha256: '', version: '', rule_count: 0, size: 0, last_error: '' } as rulesets.Source)
-    notice.value = '远程规则源已固定；刷新成功前不会替换当前有效规则。'
-  } catch (reason) { error.value = `规则源配置失败：${messageOf(reason)}` }
-  finally { remoteRuleBusy.value = false }
-}
-
-async function refreshRemoteRules() {
-  remoteRuleBusy.value = true; error.value = ''; notice.value = ''
-  try { remoteRuleSet.value = await RefreshRemoteRuleSet(); notice.value = `远程规则已验证：${remoteRuleSet.value.rule_count} 条。`; await refreshRulePreview() }
-  catch (reason) { error.value = `规则更新失败，已保留最后有效版本：${messageOf(reason)}`; remoteRuleSet.value = await GetRemoteRuleSet() }
-  finally { remoteRuleBusy.value = false }
-}
-
-async function migrateRemoteRules() {
-  remoteRuleBusy.value = true; error.value = ''; notice.value = ''
-  try {
-    await flushRuleSettings()
-    const migrated = await MigrateRemoteRuleSet()
-    customRules.value = migrated.rules as CustomRule[]
-    ruleOrder.value = [...migrated.rule_order]
-    defaultOutbound.value = migrated.default_outbound as 'a' | 'b'
-    legacyRemoteMigrated.value = Boolean(migrated.legacy_remote_migrated)
-    notice.value = `已将 ${remoteRuleSet.value?.rule_count ?? 0} 条旧版远程规则迁移到统一规则列表。`
-    await refreshRulePreview()
-  } catch (reason) { error.value = `无法迁移旧版远程规则：${messageOf(reason)}` }
-  finally { remoteRuleBusy.value = false }
 }
 
 async function exportDiagnostics() {
@@ -652,7 +624,7 @@ function buildConfig(): config.MVPConfig {
     default_outbound: defaultOutbound.value,
     direct_prefixes: directPrefixes.value.map(item => ({ prefix: item.prefix, bind_interface: item.adapter_name })),
     rule_order: ruleOrder.value,
-    custom_rules: customRules.value.filter(rule => rule.enabled).map(({ id, name, type, value, action }) => ({ id, name, type, value, action })),
+    custom_rules: customRules.value.filter(rule => rule.enabled).flatMap(rule => rule.values.map(value => ({ id: rule.id, name: rule.name, type: rule.type, value, action: rule.action }))),
     domestic: { cidrs: [], domain_suffixes: [] },
     dns: { domestic: { ...dnsSettings.value.domestic }, global: { ...dnsSettings.value.global } },
     ...(selectedMode.value === 'proxy-split' ? { proxy: { type: 'http', server: '0.0.0.0', port: 1 } } : {}),
@@ -662,7 +634,7 @@ function buildConfig(): config.MVPConfig {
 
 function updateDefaultOutbound(value: 'a' | 'b') {
   defaultOutbound.value = value
-  void saveRuleSettings()
+  void saveRuleSettings().then(refreshRulePreview)
 }
 
 async function startCore() {
@@ -790,7 +762,6 @@ async function resetApplicationSettings() {
     customRules.value = Array.isArray(storedRules.rules) ? storedRules.rules as CustomRule[] : []
     ruleOrder.value = Array.isArray(storedRules.rule_order) ? [...storedRules.rule_order] : []
     defaultOutbound.value = storedRules.default_outbound as 'a' | 'b'
-    legacyRemoteMigrated.value = Boolean(storedRules.legacy_remote_migrated)
     dnsSettings.value = normalizeDNSSettings(await GetDNSSettings() as DNSSettings)
     ipv6Policy.value = await GetIPv6Policy() as 'block' | 'split'
     coreStatus.value = { ...coreStatus.value, state: 'stopped', pid: 0 }
@@ -853,20 +824,10 @@ function trafficHeight(value: number, role: 'A' | 'B') {
 
 onMounted(async () => {
 	try { applicationConfigDirectory.value = await GetApplicationConfigDirectory() } catch { applicationConfigDirectory.value = '' }
-	let legacyRules: CustomRule[] = []
-	let legacyOrder: string[] = []
-	const legacyOutbound: 'a' | 'b' = localStorage.getItem('winrouter.default-outbound.v1') === 'a' ? 'a' : 'b'
   try {
     const storedBaselines = JSON.parse(localStorage.getItem('winrouter.trafficBaselines.v1') || '{}')
     if (storedBaselines && typeof storedBaselines === 'object' && !Array.isArray(storedBaselines)) usageBaselines.value = storedBaselines
   } catch { localStorage.removeItem('winrouter.trafficBaselines.v1') }
-  try {
-    const stored = JSON.parse(localStorage.getItem('winrouter.customRules.v1') || '[]')
-    if (Array.isArray(stored)) legacyRules = stored.slice(0, 200).filter(rule => !['geoip', 'geosite'].includes(rule.type)).map(rule => ({ ...rule, enabled: rule.enabled !== false }))
-    const storedOrder = JSON.parse(localStorage.getItem('winrouter.ruleOrder.v1') || '[]')
-    if (Array.isArray(storedOrder)) legacyOrder = storedOrder.filter(id => typeof id === 'string')
-    for (const rule of legacyRules) if (!legacyOrder.includes(rule.id)) legacyOrder.push(rule.id)
-  } catch { localStorage.removeItem('winrouter.customRules.v1') }
   try {
     const [appStatus, interfaceSnapshot, status, recovery, observed, autostart, budget, storedDNS, presets, storedIPv6, storedRules] = await Promise.all([GetStatus(), GetInterfaceSnapshot(), GetCoreStatus(), GetRecoveryStatus(), GetObservations(), GetAutostartStatus(), GetTrafficBudgetStatus(), GetDNSSettings(), GetDNSPresets(), GetIPv6Policy(), GetRuleSettings()])
     app.value = appStatus
@@ -881,14 +842,11 @@ onMounted(async () => {
     dnsSettings.value = normalizeDNSSettings(storedDNS as DNSSettings)
     dnsPresets.value = presets as DNSPreset[]
     ipv6Policy.value = storedIPv6 as 'block' | 'split'
-    customRules.value = (storedRules.initialized && Array.isArray(storedRules.rules) ? storedRules.rules : legacyRules) as CustomRule[]
-    ruleOrder.value = [...(storedRules.initialized && Array.isArray(storedRules.rule_order) ? storedRules.rule_order : legacyOrder)]
-    defaultOutbound.value = (storedRules.initialized ? storedRules.default_outbound : legacyOutbound) as 'a' | 'b'
-    legacyRemoteMigrated.value = Boolean(storedRules.legacy_remote_migrated)
+    customRules.value = (storedRules.initialized && Array.isArray(storedRules.rules) ? storedRules.rules : []) as CustomRule[]
+    ruleOrder.value = [...(storedRules.initialized && Array.isArray(storedRules.rule_order) ? storedRules.rule_order : [])]
+    defaultOutbound.value = (storedRules.initialized ? storedRules.default_outbound : 'b') as 'a' | 'b'
     proxyNodes.value = await ListProxyNodes()
     subscriptionList.value = await ListSubscriptions()
-    remoteRuleSet.value = await GetRemoteRuleSet()
-    remoteRuleForm.value = { name: remoteRuleSet.value.name || '', url: remoteRuleSet.value.url || '', expected_sha256: remoteRuleSet.value.expected_sha256 || '' }
     srsPresets.value = await GetSRSPresets()
     srsSources.value = await ListSRSSources()
     for (const source of srsSources.value) if (!ruleOrder.value.includes(`srs:${source.id}`)) ruleOrder.value.push(`srs:${source.id}`)
@@ -1073,17 +1031,19 @@ onBeforeUnmount(() => {
           <button class="primary" type="button" @click="ruleFormOpen ? resetRuleForm() : ruleFormOpen = true">{{ ruleFormOpen ? '取消' : '添加规则' }}</button>
         </section>
         <form v-if="ruleFormOpen" class="rule-form" @submit.prevent="submitRule">
+          <div class="rule-form-primary">
           <label>名称<input v-model.trim="ruleForm.name" required maxlength="80" placeholder="例如：阻止广告域名"></label>
-          <label>匹配类型<select v-model="ruleForm.type" :disabled="Boolean(ruleForm.id)"><option value="domain">域名后缀</option><option value="ip">IPv4 CIDR</option><option value="process-name">进程名称</option><option value="process-path">进程完整路径</option><option value="rule-set">规则集（geoip / geosite / SRS）</option></select></label>
-          <label v-if="ruleForm.type !== 'rule-set'">匹配值<input v-model.trim="ruleForm.value" required :placeholder="ruleForm.type === 'domain' ? 'example.com' : ruleForm.type === 'ip' ? '203.0.113.0/24' : ruleForm.type === 'process-name' ? 'browser.exe' : 'C:\\Program Files\\Browser\\browser.exe'"></label>
-          <label v-else>来源预设<select v-model="srsForm.preset_id" @change="chooseSRSPreset"><option value="">自定义 HTTPS 地址</option><option v-for="preset in srsPresets" :key="preset.id" :value="preset.id">{{ preset.name }}</option></select></label>
-          <label>目标<select v-model="ruleForm.action"><option value="a">{{ selectedAdapterA?.friendly_name ?? '网卡 A' }}</option><option value="b">{{ selectedAdapterB?.friendly_name ?? '网卡 B' }}</option><option value="final">当前模式最终出口</option><option value="reject">拒绝</option></select></label>
+          <label>匹配类型<select v-model="ruleForm.type" :disabled="Boolean(ruleForm.id)"><option value="domain-suffix">域名后缀</option><option value="domain">精确域名</option><option value="ip">IPv4 CIDR</option><option value="process-name">进程名称</option><option value="process-path">进程完整路径</option><option value="rule-set">SRS 规则集</option></select></label>
+          <label v-if="ruleForm.type === 'rule-set'">来源预设<select v-model="srsForm.preset_id" @change="chooseSRSPreset"><option value="">自定义 HTTPS 地址</option><option v-for="preset in srsPresets" :key="preset.id" :value="preset.id">{{ preset.name }}</option></select></label>
+          <label>目标<select v-model="ruleForm.action"><option value="a">{{ selectedAdapterA?.friendly_name ?? '网卡 A' }}</option><option value="b">{{ selectedAdapterB?.friendly_name ?? '网卡 B' }}</option><option value="reject">拒绝</option></select></label>
+          <label class="toggle-label"><input v-model="ruleForm.enabled" type="checkbox"><span>启用规则</span></label>
+          </div>
+          <label v-if="ruleForm.type !== 'rule-set'" class="rule-form-values">匹配值（每行一个）<textarea v-model="ruleForm.valuesText" required rows="6" placeholder="每行填写一个域名、CIDR 或进程匹配值"></textarea></label>
           <template v-if="ruleForm.type === 'rule-set'">
             <label>数据类型<select v-model="srsForm.kind" :disabled="Boolean(srsForm.preset_id)"><option value="domain">域名集合 / geosite</option><option value="ip">IP 集合 / geoip</option></select></label>
             <label class="remote-url">固定 HTTPS 地址<input v-model.trim="srsForm.url" required type="url" :readonly="Boolean(srsForm.preset_id)" placeholder="https://example.com/rules.srs"></label>
             <label class="remote-hash">预期 SHA-256 <small>{{ srsForm.preset_id ? '内置预设可留空' : '自定义来源必须填写' }}</small><input v-model.trim="srsForm.expected_sha256" :required="!srsForm.preset_id" minlength="64" maxlength="64"></label>
           </template>
-          <label class="toggle-label"><input v-model="ruleForm.enabled" type="checkbox"><span>启用规则</span></label>
           <div class="rule-form-actions"><button class="secondary" type="button" @click="resetRuleForm">取消</button><button class="primary" type="submit" :disabled="Boolean(srsBusyID)">{{ ruleForm.id ? '保存修改' : '添加规则' }}</button></div>
         </form>
         <section class="rule-master-list" aria-label="规则总表">
@@ -1093,7 +1053,7 @@ onBeforeUnmount(() => {
             <strong class="master-rule-order">{{ index + 1 }}</strong>
             <template v-if="row.kind === 'custom'">
               <label class="master-rule-enabled"><input type="checkbox" :checked="row.rule.enabled" @change="toggleCustomRule(row.rule)"><span>{{ row.rule.enabled ? '启用' : '停用' }}</span></label>
-              <div><strong>{{ row.rule.name }}</strong><small>{{ ruleTypeText(row.rule.type) }} · {{ row.rule.value }}</small></div>
+              <div><strong>{{ row.rule.name }}</strong><small>{{ ruleTypeText(row.rule.type) }} · {{ row.rule.values.length }} 个值 · {{ row.rule.values.slice(0, 3).join('、') }}{{ row.rule.values.length > 3 ? '…' : '' }}</small></div>
               <span>{{ row.rule.action === 'a' ? `网卡 A · ${selectedAdapterA?.friendly_name ?? ''}` : row.rule.action === 'b' ? `网卡 B · ${selectedAdapterB?.friendly_name ?? ''}` : row.rule.action === 'reject' ? '拒绝' : '兜底出口' }}</span>
               <div class="proxy-actions"><button class="secondary" type="button" @click="moveMasterRule(row.key, -1)" :disabled="index === 0">上移</button><button class="secondary" type="button" @click="moveMasterRule(row.key, 1)" :disabled="index === masterRows.length - 1">下移</button><button class="secondary" type="button" @click="editCustomRule(row.rule)">编辑</button><button class="delete-button" type="button" @click="deleteCustomRule(row.rule.id)">删除</button></div>
             </template>
@@ -1141,25 +1101,8 @@ onBeforeUnmount(() => {
         <section v-if="processRuleStatuses.length" class="process-statuses" aria-label="进程规则状态">
           <div v-for="status in processRuleStatuses" :key="`${status.type}-${status.value}`" :class="status.state"><strong>{{ status.value }}</strong><span>{{ status.message }}</span><small v-if="status.paths?.length">{{ status.paths.join('、') }}</small></div>
         </section>
-        <details class="legacy-rules"><summary>旧版 JSON 远程规则{{ legacyRemoteMigrated ? ' · 已迁移' : '' }}</summary><section class="remote-rules">
-          <div class="rules-heading"><div><p class="section-kicker">兼容迁移</p><h2>旧版远程规则集</h2><p>{{ legacyRemoteMigrated ? '规则已经复制到统一列表；旧来源仅保留用于审计，不再参与运行。' : '先验证最后一个远程版本，再将其中规则一次性迁移到统一列表。迁移完成后旧来源不再参与运行。' }}</p></div><div class="proxy-actions" v-if="!legacyRemoteMigrated"><button class="secondary" type="button" :disabled="remoteRuleBusy || !remoteRuleSet?.name" @click="refreshRemoteRules">{{ remoteRuleBusy ? '处理中' : '更新来源' }}</button><button class="primary" type="button" :disabled="remoteRuleBusy || !remoteRuleSet?.applied_sha256" @click="migrateRemoteRules">迁移到统一列表</button></div></div>
-          <div v-if="remoteRuleSet?.name" class="rule-source-status">
-            <div><span>当前下载来源</span><strong>{{ remoteRuleSet.name }}</strong><code>{{ remoteRuleSet.url }}</code></div>
-            <div><span>预期 SHA-256</span><code>{{ remoteRuleSet.expected_sha256 }}</code></div>
-            <div><span>最近成功更新</span><strong>{{ formatRuleSetTime(remoteRuleSet.updated_at) }}</strong></div>
-          </div>
-          <p v-else class="rule-source-empty">尚未配置远程规则来源。保存来源后可使用“立即更新”下载并校验规则。</p>
-          <form v-if="!legacyRemoteMigrated" class="rule-form" @submit.prevent="configureRemoteRules">
-            <label>名称<input v-model.trim="remoteRuleForm.name" required maxlength="80"></label>
-            <label class="remote-url">固定 HTTPS 地址<input v-model.trim="remoteRuleForm.url" required type="url" placeholder="https://example.com/rules.json"></label>
-            <label class="remote-hash">预期 SHA-256<input v-model.trim="remoteRuleForm.expected_sha256" required minlength="64" maxlength="64"></label>
-            <div class="rule-form-actions"><button class="primary" type="submit" :disabled="remoteRuleBusy">保存来源</button></div>
-          </form>
-          <div v-if="remoteRuleSet?.applied_sha256" class="rule-set-status"><strong>当前有效版本 {{ remoteRuleSet.version }}</strong><span>{{ remoteRuleSet.rule_count }} 条 · {{ remoteRuleSet.size }} 字节</span><small>实际 SHA-256 {{ remoteRuleSet.applied_sha256 }}</small></div>
-          <p v-if="remoteRuleSet?.last_error" class="field-error">最近更新失败：{{ remoteRuleSet.last_error }}。最后有效缓存未被替换。</p>
-        </section></details>
         <section class="final-rules">
-          <div class="rules-heading"><div><p class="section-kicker">实际生成结果</p><h2>最终规则顺序</h2><p>包含基础设施、用户规则、直连前缀、内置规则及最终出口。</p></div><button class="secondary" type="button" :disabled="!hasSavedSelection" @click="refreshRulePreview">刷新预览</button></div>
+          <div class="rules-heading"><div><p class="section-kicker">实际生成结果</p><h2>最终规则顺序</h2><p>包含基础设施、用户规则、直连前缀、内置规则及最终出口。</p></div><button class="secondary" type="button" @click="refreshRulePreview">刷新预览</button></div>
           <p v-if="rulePreviewError" class="field-error">冲突诊断：{{ rulePreviewError }}</p>
           <div class="final-rule-list"><div v-for="item in rulePreview" :key="item.position"><span>{{ item.position }}</span><strong>{{ item.category }}</strong><code>{{ item.match.join('、') }}</code><small>{{ item.action }}</small></div></div>
         </section>

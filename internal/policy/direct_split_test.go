@@ -46,7 +46,7 @@ func TestBuildDirectSplitRejectsAmbiguousAndInvalidInputs(t *testing.T) {
 func TestBuildDirectSplitPlacesCustomRulesBeforeDirectPrefixes(t *testing.T) {
 	rules, err := BuildDirectSplit(Request{
 		DNSUpstreamA: "223.5.5.5", DNSUpstreamB: "1.1.1.1", BlockIPv6: true,
-		CustomRules:    []CustomRule{{Type: "domain", Value: "Example.COM.", Action: "reject"}, {Type: "ip", Value: "8.8.8.8/32", Action: "route", Outbound: "a"}},
+		CustomRules:    []CustomRule{{Type: "domain-suffix", Value: "Example.COM.", Action: "reject"}, {Type: "ip", Value: "8.8.8.8/32", Action: "route", Outbound: "a"}},
 		DirectPrefixes: []DirectPrefix{{Prefix: "192.168.1.0/24", Outbound: "a"}},
 	})
 	if err != nil {
@@ -94,7 +94,7 @@ func TestBuildDirectSplitPreservesUserRuleOrderAndValidatesIdentity(t *testing.T
 			users = append(users, rule)
 		}
 	}
-	if len(users) != 3 || users[0].Domains[0] != "example.com" || users[1].ProcessName[0] != "browser.exe" || users[2].ProcessPath[0] != `C:\Tools\browser.exe` {
+	if len(users) != 3 || users[0].ExactDomains[0] != "example.com" || users[1].ProcessName[0] != "browser.exe" || users[2].ProcessPath[0] != `C:\Tools\browser.exe` {
 		t.Fatalf("user rule order = %#v", users)
 	}
 	for _, value := range []CustomRule{{Type: "process-name", Value: `C:\bad.exe`, Action: "reject"}, {Type: "process-path", Value: "relative.exe", Action: "reject"}} {

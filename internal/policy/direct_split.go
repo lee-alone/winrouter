@@ -44,16 +44,17 @@ type CustomRule struct {
 }
 
 type Rule struct {
-	ID          string
-	Category    Category
-	Protocol    string
-	CIDRs       []string
-	Domains     []string
-	IPVersion   int
-	ProcessName []string
-	ProcessPath []string
-	Action      string
-	Outbound    string
+	ID           string
+	Category     Category
+	Protocol     string
+	CIDRs        []string
+	Domains      []string
+	ExactDomains []string
+	IPVersion    int
+	ProcessName  []string
+	ProcessPath  []string
+	Action       string
+	Outbound     string
 }
 
 var reservedCIDRs = []string{
@@ -101,13 +102,17 @@ func BuildDirectSplit(request Request) ([]Rule, error) {
 	for index, custom := range request.CustomRules {
 		var rule Rule
 		switch custom.Type {
-		case "domain":
+		case "domain", "domain-suffix":
 			values, normalizeErr := normalizeDomains([]string{custom.Value})
 			if normalizeErr != nil {
 				return nil, fmt.Errorf("custom rule %d: %w", index+1, normalizeErr)
 			}
 			custom.Value = values[0]
-			rule = Rule{Category: CategoryUser, Domains: []string{custom.Value}}
+			if custom.Type == "domain" {
+				rule = Rule{Category: CategoryUser, ExactDomains: []string{custom.Value}}
+			} else {
+				rule = Rule{Category: CategoryUser, Domains: []string{custom.Value}}
+			}
 		case "ip":
 			values, normalizeErr := normalizePrefixes([]string{custom.Value})
 			if normalizeErr != nil {

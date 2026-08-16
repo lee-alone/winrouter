@@ -135,7 +135,7 @@ func ValidateMVPModel(input MVPConfig) error {
 		if strings.TrimSpace(custom.Name) == "" || len([]rune(custom.Name)) > 80 {
 			return fmt.Errorf("custom rule %d requires a name of at most 80 characters", index+1)
 		}
-		if custom.Type != "domain" && custom.Type != "ip" && custom.Type != "process-name" && custom.Type != "process-path" {
+		if custom.Type != "domain" && custom.Type != "domain-suffix" && custom.Type != "ip" && custom.Type != "process-name" && custom.Type != "process-path" {
 			return fmt.Errorf("custom rule %q has unsupported type %q", custom.Name, custom.Type)
 		}
 		switch custom.Action {
@@ -289,12 +289,12 @@ func GenerateMVP(input MVPConfig) (Generated, error) {
 		category string
 		key      string
 	}
-	entries := make(map[string]orderedEntry)
+	entries := make(map[string][]orderedEntry)
 	for _, rule := range rules {
 		if rule.Category != policy.CategoryUser {
 			continue
 		}
-		entries[rule.ID] = orderedEntry{route: RouteRule{Protocol: rule.Protocol, IPCIDR: rule.CIDRs, DomainSuffix: rule.Domains, IPVersion: rule.IPVersion, ProcessName: rule.ProcessName, ProcessPath: rule.ProcessPath, Action: rule.Action, Outbound: rule.Outbound}, category: string(rule.Category), key: rule.ID}
+		entries[rule.ID] = append(entries[rule.ID], orderedEntry{route: RouteRule{Protocol: rule.Protocol, IPCIDR: rule.CIDRs, Domain: rule.ExactDomains, DomainSuffix: rule.Domains, IPVersion: rule.IPVersion, ProcessName: rule.ProcessName, ProcessPath: rule.ProcessPath, Action: rule.Action, Outbound: rule.Outbound}, category: string(rule.Category), key: rule.ID})
 	}
 	for _, ruleSet := range input.RuleSets {
 		action, outbound := "route", ""
@@ -309,26 +309,26 @@ func GenerateMVP(input MVPConfig) (Generated, error) {
 			action = "reject"
 		}
 		key := "srs:" + strings.TrimPrefix(ruleSet.Tag, "winrouter-")
-		entries[key] = orderedEntry{route: RouteRule{RuleSet: []string{ruleSet.Tag}, Action: action, Outbound: outbound}, category: "rule-set", key: key}
+		entries[key] = []orderedEntry{{route: RouteRule{RuleSet: []string{ruleSet.Tag}, Action: action, Outbound: outbound}, category: "rule-set", key: key}}
 	}
-	ordered := make([]orderedEntry, 0, len(entries))
+	ordered := make([]orderedEntry, 0, len(rules)+len(input.RuleSets))
 	seen := make(map[string]bool)
 	for _, key := range input.RuleOrder {
-		if entry, ok := entries[key]; ok && !seen[key] {
-			ordered = append(ordered, entry)
+		if group, ok := entries[key]; ok && !seen[key] {
+			ordered = append(ordered, group...)
 			seen[key] = true
 		}
 	}
 	for _, rule := range rules {
 		if rule.Category == policy.CategoryUser && !seen[rule.ID] {
-			ordered = append(ordered, entries[rule.ID])
+			ordered = append(ordered, entries[rule.ID]...)
 			seen[rule.ID] = true
 		}
 	}
 	for _, ruleSet := range input.RuleSets {
 		key := "srs:" + strings.TrimPrefix(ruleSet.Tag, "winrouter-")
 		if !seen[key] {
-			ordered = append(ordered, entries[key])
+			ordered = append(ordered, entries[key]...)
 			seen[key] = true
 		}
 	}
@@ -350,7 +350,7 @@ func GenerateMVP(input MVPConfig) (Generated, error) {
 		if !inserted && (rule.Category == policy.CategoryDirectPrefix || rule.Category == policy.CategoryReserved || rule.Category == policy.CategoryDomestic) {
 			insertOrdered()
 		}
-		model.Route.Rules = append(model.Route.Rules, RouteRule{Protocol: rule.Protocol, IPCIDR: rule.CIDRs, DomainSuffix: rule.Domains, IPVersion: rule.IPVersion, ProcessName: rule.ProcessName, ProcessPath: rule.ProcessPath, Action: rule.Action, Outbound: rule.Outbound})
+		model.Route.Rules = append(model.Route.Rules, RouteRule{Protocol: rule.Protocol, IPCIDR: rule.CIDRs, Domain: rule.ExactDomains, DomainSuffix: rule.Domains, IPVersion: rule.IPVersion, ProcessName: rule.ProcessName, ProcessPath: rule.ProcessPath, Action: rule.Action, Outbound: rule.Outbound})
 		categories = append(categories, string(rule.Category))
 	}
 	if !inserted {
@@ -384,7 +384,8 @@ func PreviewMVPRules(input MVPConfig) ([]RulePreview, error) {
 	}
 	result := make([]RulePreview, 0, len(generated.Model.Route.Rules)+1)
 	for index, rule := range generated.Model.Route.Rules {
-		matches := append([]string(nil), rule.DomainSuffix...)
+		matches := append([]string(nil), rule.Domain...)
+		matches = append(matches, rule.DomainSuffix...)
 		matches = append(matches, rule.IPCIDR...)
 		for _, value := range rule.RuleSet {
 			matches = append(matches, "rule-set="+value)

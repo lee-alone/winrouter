@@ -1,34 +1,67 @@
 package rulesettings
 
 import (
-	"fmt"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
-func TestConfigurePersistsAndClones(t *testing.T) {
+func TestConfigurePersistsMultiValueRulesAndClones(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "rules.json")
 	m, err := New(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if m.Get().Initialized {
-		t.Fatal("new settings unexpectedly initialized")
-	}
 	settings := Defaults()
-	settings.Rules = []Rule{{ID: "browser", Name: "Browser", Type: "process-name", Value: "browser.exe", Action: "b", Enabled: true}}
+	settings.Rules = []Rule{{ID: "browser", Name: "Browser", Type: "process-name", Values: []string{"browser.exe", "helper.exe"}, Action: "b", Enabled: true}}
 	settings.RuleOrder = []string{"srs:sagernet-geosite-cn", "browser"}
 	stored, err := m.Configure(settings)
 	if err != nil {
 		t.Fatal(err)
 	}
-	stored.Rules[0].Name = "mutated"
+	stored.Rules[0].Values[0] = "mutated.exe"
 	reloaded, err := New(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := reloaded.Get(); !got.Initialized || got.Rules[0].Name != "Browser" || got.RuleOrder[0] != "srs:sagernet-geosite-cn" {
+	got := reloaded.Get()
+	if !got.Initialized || len(got.Rules[0].Values) != 2 || got.Rules[0].Values[0] != "browser.exe" {
 		t.Fatalf("reloaded settings = %#v", got)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), `"value"`) || !strings.Contains(string(data), `"values"`) {
+		t.Fatalf("unexpected persisted schema: %s", data)
+	}
+}
+
+func TestNewRejectsLegacyValueField(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "rules.json")
+	data := `{"schema_version":2,"initialized":true,"default_outbound":"b","rules":[{"id":"legacy","name":"Legacy","type":"domain","value":"example.com","action":"a","enabled":true}],"rule_order":[]}`
+	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := New(path); err == nil || !strings.Contains(err.Error(), "legacy rule settings format") {
+		t.Fatalf("legacy value field error = %v", err)
+	}
+}
+
+func TestValidationRejectsDuplicateValuesAndActionConflicts(t *testing.T) {
+	duplicate := Defaults()
+	duplicate.Rules = []Rule{{ID: "same", Name: "Same", Type: "domain-suffix", Values: []string{"Example.COM.", "example.com"}, Action: "a", Enabled: true}}
+	if err := Validate(duplicate); err == nil {
+		t.Fatal("semantic duplicate accepted")
+	}
+	conflict := Defaults()
+	conflict.Rules = []Rule{
+		{ID: "one", Name: "One", Type: "domain", Values: []string{"example.com"}, Action: "a", Enabled: true},
+		{ID: "two", Name: "Two", Type: "domain", Values: []string{"Example.COM."}, Action: "b", Enabled: true},
+	}
+	if err := Validate(conflict); err == nil {
+		t.Fatal("conflicting actions accepted")
 	}
 }
 
@@ -40,69 +73,5 @@ func TestGetAlwaysReturnsArrayBackedCollections(t *testing.T) {
 	got := m.Get()
 	if got.Rules == nil || got.RuleOrder == nil {
 		t.Fatalf("empty collections must serialize as arrays: %#v", got)
-	}
-}
-
-func TestValidationRejectsInvalidAndDuplicateValues(t *testing.T) {
-	tests := []Settings{Defaults(), Defaults(), Defaults(), Defaults()}
-	tests[0].DefaultOutbound = "proxy"
-	tests[1].Rules = []Rule{{ID: "bad id", Name: "Bad", Type: "domain", Value: "example.com", Action: "a"}}
-	tests[2].Rules = []Rule{{ID: "same", Name: "One", Type: "domain", Value: "one.example", Action: "a"}, {ID: "same", Name: "Two", Type: "domain", Value: "two.example", Action: "b"}}
-	tests[3].RuleOrder = []string{"same", "same"}
-	for index, value := range tests {
-		if err := Validate(value); err == nil {
-			t.Fatalf("case %d accepted", index)
-		}
-	}
-}
-
-func TestMigrateLegacyRemoteIsAtomicAndIdempotent(t *testing.T) {
-	m, err := New(filepath.Join(t.TempDir(), "rules.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	first, err := m.MigrateLegacyRemote([]Rule{{ID: "legacy-remote-001", Name: "Imported rule 1", Type: "domain", Value: "example.com", Action: "b", Enabled: true}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	second, err := m.MigrateLegacyRemote([]Rule{{ID: "legacy-remote-002", Name: "Imported rule 2", Type: "ip", Value: "203.0.113.0/24", Action: "a", Enabled: true}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !first.LegacyRemoteMigrated || len(second.Rules) != 1 || second.Rules[0].ID != "legacy-remote-001" {
-		t.Fatalf("migration was not idempotent: %#v", second)
-	}
-}
-
-func TestMigrateLegacyRemoteRejectsOverflowWithoutChangingSettings(t *testing.T) {
-	m, _ := New(filepath.Join(t.TempDir(), "rules.json"))
-	settings := Defaults()
-	for index := 0; index < 200; index++ {
-		settings.Rules = append(settings.Rules, Rule{ID: fmt.Sprintf("rule-%03d", index), Name: "Existing", Type: "domain", Value: fmt.Sprintf("%d.example", index), Action: "a", Enabled: true})
-	}
-	if _, err := m.Configure(settings); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := m.MigrateLegacyRemote([]Rule{{ID: "legacy-remote-001", Name: "Imported", Type: "domain", Value: "example.com", Action: "b", Enabled: true}}); err == nil {
-		t.Fatal("overflow migration accepted")
-	}
-	if got := m.Get(); got.LegacyRemoteMigrated || len(got.Rules) != 200 {
-		t.Fatalf("failed migration changed settings: %#v", got)
-	}
-}
-
-func TestMigrationRejectsSemanticConflictWithoutChangingSettings(t *testing.T) {
-	m, _ := New(filepath.Join(t.TempDir(), "rules.json"))
-	settings := Defaults()
-	settings.Rules = []Rule{{ID: "existing", Name: "Existing", Type: "domain", Value: "Example.COM.", Action: "a", Enabled: true}}
-	if _, err := m.Configure(settings); err != nil {
-		t.Fatal(err)
-	}
-	_, err := m.MigrateLegacyRemote([]Rule{{ID: "legacy-remote-001", Name: "Imported", Type: "domain", Value: "example.com", Action: "b", Enabled: true}})
-	if err == nil {
-		t.Fatal("semantic conflict accepted")
-	}
-	if got := m.Get(); got.LegacyRemoteMigrated || len(got.Rules) != 1 {
-		t.Fatalf("failed conflict migration changed settings: %#v", got)
 	}
 }

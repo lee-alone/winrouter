@@ -31,7 +31,6 @@ import (
 	"winrouter/internal/observability"
 	"winrouter/internal/processrules"
 	"winrouter/internal/recovery"
-	"winrouter/internal/rulesets"
 	"winrouter/internal/rulesettings"
 	"winrouter/internal/srssets"
 	"winrouter/internal/subscriptions"
@@ -47,8 +46,6 @@ type App struct {
 	nodeStore             *nodes.Store
 	nodeError             error
 	subscriptions         *subscriptions.Manager
-	ruleSets              *rulesets.Manager
-	ruleSetError          error
 	ruleSettings          *rulesettings.Manager
 	ruleSettingsError     error
 	srsSets               *srssets.Manager
@@ -182,16 +179,6 @@ func (a *App) Startup(ctx context.Context) {
 		if subscriptionErr != nil {
 			a.observations.Log(observability.LevelError, "proxy", "Subscription store failed to load", newCorrelationID(), map[string]any{"error": subscriptionErr.Error()})
 		}
-	}
-	ruleSetManager, ruleSetErr := rulesets.New(filepath.Join(configDirectory, "WinRouter", "ruleset.json"))
-	a.mu.Lock()
-	a.ruleSets = ruleSetManager
-	a.ruleSetError = ruleSetErr
-	a.mu.Unlock()
-	if ruleSetErr != nil {
-		a.observations.Log(observability.LevelError, "rules", "Remote rule-set store failed to load", newCorrelationID(), map[string]any{"error": ruleSetErr.Error()})
-	} else {
-		a.syncRuleSetMetadata(ruleSetManager.Get())
 	}
 	ruleSettingsManager, ruleSettingsErr := rulesettings.New(filepath.Join(configDirectory, "WinRouter", "rule-settings.json"))
 	a.mu.Lock()
@@ -467,10 +454,6 @@ func (a *App) PreviewCoreRules(input config.MVPConfig) ([]config.RulePreview, er
 		if err != nil {
 			return nil, err
 		}
-	}
-	input, err = a.withRemoteRules(input)
-	if err != nil {
-		return nil, err
 	}
 	input, err = a.withSRSRuleSets(input)
 	if err != nil {
@@ -753,10 +736,6 @@ func (a *App) ValidateCoreConfiguration(input config.MVPConfig) error {
 			}
 		}
 	}
-	input, err = a.withRemoteRules(input)
-	if err != nil {
-		return err
-	}
 	input, err = a.withSRSRuleSets(input)
 	if err != nil {
 		return err
@@ -802,10 +781,6 @@ func (a *App) ApplyCoreConfiguration(input config.MVPConfig) (core.Status, error
 			}
 		}
 	}
-	input, err = a.withRemoteRules(input)
-	if err != nil {
-		return core.Status{}, err
-	}
 	input, err = a.withSRSRuleSets(input)
 	if err != nil {
 		return core.Status{}, err
@@ -843,12 +818,6 @@ func (a *App) ApplyCoreConfiguration(input config.MVPConfig) (core.Status, error
 		if len(input.Domestic.CIDRs)+len(input.Domestic.DomainSuffixes) > 0 {
 			items = append(items, observability.RuleSetMetadata{Name: "domestic-policy", Version: fmt.Sprintf("schema-v%d", input.SchemaVersion), SHA256: fmt.Sprintf("%x", digest), Source: "winrouter-config", RuleCount: len(input.Domestic.CIDRs) + len(input.Domestic.DomainSuffixes), Size: int64(len(metadata)), LoadResult: "validated-and-applied"})
 		}
-		if manager, managerErr := a.getRuleSetManager(); managerErr == nil {
-			remote := manager.Get()
-			if remote.Name != "" {
-				items = append(items, ruleSetMetadata(remote))
-			}
-		}
 		if manager, managerErr := a.getSRSManager(); managerErr == nil {
 			for _, source := range manager.List() {
 				result := "configured"
@@ -864,14 +833,6 @@ func (a *App) ApplyCoreConfiguration(input config.MVPConfig) (core.Status, error
 		a.observations.SetRuleSets(items)
 	}
 	return status, err
-}
-
-func (a *App) GetRemoteRuleSet() (rulesets.Source, error) {
-	manager, err := a.getRuleSetManager()
-	if err != nil {
-		return rulesets.Source{}, err
-	}
-	return manager.Get(), nil
 }
 
 func (a *App) GetRuleSettings() (rulesettings.Settings, error) {
@@ -900,51 +861,6 @@ func (a *App) SetRuleSettings(settings rulesettings.Settings) (rulesettings.Sett
 	return manager.Configure(settings)
 }
 
-func (a *App) MigrateRemoteRuleSet() (rulesettings.Settings, error) {
-	ruleSetManager, err := a.getRuleSetManager()
-	if err != nil {
-		return rulesettings.Settings{}, err
-	}
-	remote, err := ruleSetManager.Rules()
-	if err != nil {
-		return rulesettings.Settings{}, fmt.Errorf("load verified remote rules for migration: %w", err)
-	}
-	if len(remote) == 0 {
-		return rulesettings.Settings{}, errors.New("no verified remote rules are available to migrate")
-	}
-	source := ruleSetManager.Get()
-	prefix := source.AppliedSHA256
-	if len(prefix) > 12 {
-		prefix = prefix[:12]
-	}
-	imported := make([]rulesettings.Rule, 0, len(remote))
-	for index, rule := range remote {
-		imported = append(imported, rulesettings.Rule{
-			ID:      fmt.Sprintf("legacy-remote-%s-%03d", prefix, index+1),
-			Name:    fmt.Sprintf("Imported remote rule %d", index+1),
-			Type:    rule.Type,
-			Value:   rule.Value,
-			Action:  rule.Action,
-			Enabled: true,
-		})
-	}
-	a.mu.RLock()
-	settingsManager, loadErr := a.ruleSettings, a.ruleSettingsError
-	a.mu.RUnlock()
-	if loadErr != nil {
-		return rulesettings.Settings{}, loadErr
-	}
-	if settingsManager == nil {
-		return rulesettings.Settings{}, errors.New("rule settings manager is not ready")
-	}
-	settings, err := settingsManager.MigrateLegacyRemote(imported)
-	if err != nil {
-		return rulesettings.Settings{}, err
-	}
-	a.observations.Log(observability.LevelInfo, "rules", "Legacy remote rules migrated to unified settings", newCorrelationID(), map[string]any{"rule_count": len(imported), "source_version": source.Version})
-	return settings, nil
-}
-
 func (a *App) withRuleSettings(input config.MVPConfig) (config.MVPConfig, error) {
 	settings, err := a.GetRuleSettings()
 	if err != nil {
@@ -964,7 +880,9 @@ func applyRuleSettings(input config.MVPConfig, settings rulesettings.Settings) c
 		if !rule.Enabled {
 			continue
 		}
-		input.CustomRules = append(input.CustomRules, config.MVPCustomRule{ID: rule.ID, Name: rule.Name, Type: rule.Type, Value: rule.Value, Action: rule.Action})
+		for _, value := range rule.Values {
+			input.CustomRules = append(input.CustomRules, config.MVPCustomRule{ID: rule.ID, Name: rule.Name, Type: rule.Type, Value: value, Action: rule.Action})
+		}
 	}
 	return input
 }
@@ -1015,70 +933,6 @@ func (a *App) DeleteSRSSource(id string) error {
 	return nil
 }
 
-func (a *App) ConfigureRemoteRuleSet(source rulesets.Source) (rulesets.Source, error) {
-	manager, err := a.getRuleSetManager()
-	if err != nil {
-		return rulesets.Source{}, err
-	}
-	configured, err := manager.Configure(source)
-	if err != nil {
-		return rulesets.Source{}, err
-	}
-	a.syncRuleSetMetadata(configured)
-	return configured, nil
-}
-
-func (a *App) RefreshRemoteRuleSet() (rulesets.Source, error) {
-	manager, err := a.getRuleSetManager()
-	if err != nil {
-		return rulesets.Source{}, err
-	}
-	ctx, cancel := context.WithTimeout(a.ctx, 20*time.Second)
-	defer cancel()
-	updated, err := manager.Update(ctx)
-	a.syncRuleSetMetadata(updated)
-	if err != nil {
-		a.observations.Log(observability.LevelWarning, "rules", "Remote rule-set update rejected; last valid cache retained", newCorrelationID(), map[string]any{"error": err.Error()})
-		return updated, err
-	}
-	a.observations.Log(observability.LevelInfo, "rules", "Remote rule-set verified and cached", "", map[string]any{"version": updated.Version, "rule_count": updated.RuleCount})
-	return updated, nil
-}
-
-func (a *App) getRuleSetManager() (*rulesets.Manager, error) {
-	a.mu.RLock()
-	defer a.mu.RUnlock()
-	if a.ruleSetError != nil {
-		return nil, a.ruleSetError
-	}
-	if a.ruleSets == nil {
-		return nil, errors.New("remote rule-set manager is not ready")
-	}
-	return a.ruleSets, nil
-}
-
-func (a *App) withRemoteRules(input config.MVPConfig) (config.MVPConfig, error) {
-	settings, err := a.GetRuleSettings()
-	if err != nil {
-		return input, err
-	}
-	if settings.LegacyRemoteMigrated {
-		return input, nil
-	}
-	manager, err := a.getRuleSetManager()
-	if err != nil {
-		return input, err
-	}
-	remote, err := manager.Rules()
-	if err != nil {
-		return input, fmt.Errorf("load verified remote rules: %w", err)
-	}
-	for index, rule := range remote {
-		input.CustomRules = append(input.CustomRules, config.MVPCustomRule{Name: fmt.Sprintf("Remote rule %d", index+1), Type: rule.Type, Value: rule.Value, Action: rule.Action})
-	}
-	return input, nil
-}
-
 func (a *App) getSRSManager() (*srssets.Manager, error) {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
@@ -1109,11 +963,6 @@ func (a *App) withSRSRuleSets(input config.MVPConfig) (config.MVPConfig, error) 
 
 func (a *App) syncAllRuleSetMetadata() {
 	items := make([]observability.RuleSetMetadata, 0)
-	if manager, err := a.getRuleSetManager(); err == nil {
-		if source := manager.Get(); source.Name != "" {
-			items = append(items, ruleSetMetadata(source))
-		}
-	}
 	if manager, err := a.getSRSManager(); err == nil {
 		for _, source := range manager.List() {
 			result := "configured"
@@ -1127,24 +976,6 @@ func (a *App) syncAllRuleSetMetadata() {
 		}
 	}
 	a.observations.SetRuleSets(items)
-}
-
-func (a *App) syncRuleSetMetadata(source rulesets.Source) {
-	if source.Name == "" {
-		return
-	}
-	a.observations.SetRuleSets([]observability.RuleSetMetadata{ruleSetMetadata(source)})
-}
-
-func ruleSetMetadata(source rulesets.Source) observability.RuleSetMetadata {
-	result := "configured"
-	if source.AppliedSHA256 != "" {
-		result = "validated-and-cached"
-	}
-	if source.LastError != "" {
-		result = "update-failed-last-valid-retained"
-	}
-	return observability.RuleSetMetadata{Name: source.Name, Version: source.Version, SHA256: source.AppliedSHA256, Source: source.URL, RuleCount: source.RuleCount, Size: source.Size, LoadResult: result}
 }
 
 func (a *App) StopCore() (core.Status, error) {

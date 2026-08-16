@@ -150,6 +150,28 @@ func TestGenerateMVPCustomRulesMapActionsAndPreserveOrder(t *testing.T) {
 	}
 }
 
+func TestGenerateMVPPreservesEveryValueInAGroupedRule(t *testing.T) {
+	input := fixtureInput(t)
+	input.CustomRules = []MVPCustomRule{
+		{ID: "domains", Name: "Domains", Type: "domain-suffix", Value: "one.example", Action: "b"},
+		{ID: "domains", Name: "Domains", Type: "domain-suffix", Value: "two.example", Action: "b"},
+	}
+	input.RuleOrder = []string{"domains"}
+	generated, err := GenerateMVP(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	values := make([]string, 0, 2)
+	for index, category := range generated.RuleCategories {
+		if category == "user" {
+			values = append(values, generated.Model.Route.Rules[index].DomainSuffix...)
+		}
+	}
+	if len(values) != 2 || values[0] != "one.example" || values[1] != "two.example" {
+		t.Fatalf("grouped values = %#v", values)
+	}
+}
+
 func TestPreviewMVPRulesIncludesGeneratedOrderAndFinal(t *testing.T) {
 	input := fixtureInput(t)
 	input.CustomRules = []MVPCustomRule{{Name: "block", Type: "domain", Value: "ads.example", Action: "reject"}}
@@ -174,7 +196,7 @@ func TestPreviewMVPRulesIncludesGeneratedOrderAndFinal(t *testing.T) {
 func TestGenerateMVPPreservesUserRuleOrder(t *testing.T) {
 	input := fixtureInput(t)
 	input.CustomRules = []MVPCustomRule{
-		{Name: "site", Type: "domain", Value: "example.com", Action: "reject"},
+		{Name: "site", Type: "domain-suffix", Value: "example.com", Action: "reject"},
 		{Name: "browser", Type: "process-name", Value: "browser.exe", Action: "b"},
 		{Name: "specific browser", Type: "process-path", Value: `C:\Tools\browser.exe`, Action: "a"},
 	}

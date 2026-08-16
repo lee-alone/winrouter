@@ -108,6 +108,7 @@ type RouteConfig struct {
 type RouteRule struct {
 	Protocol     string   `json:"protocol,omitempty"`
 	IPCIDR       []string `json:"ip_cidr,omitempty"`
+	Domain       []string `json:"domain,omitempty"`
 	DomainSuffix []string `json:"domain_suffix,omitempty"`
 	IPVersion    int      `json:"ip_version,omitempty"`
 	ProcessName  []string `json:"process_name,omitempty"`
