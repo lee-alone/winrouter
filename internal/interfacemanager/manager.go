@@ -132,6 +132,24 @@ func (m *Manager) Select(interfaceA, interfaceB interfaces.Adapter) (Snapshot, e
 	return m.Refresh()
 }
 
+func (m *Manager) ClearSelection() (Snapshot, error) {
+	m.mu.Lock()
+	previous := m.state
+	m.state.InterfaceA = interfaces.Identity{}
+	m.state.InterfaceB = interfaces.Identity{}
+	state := m.state
+	m.mu.Unlock()
+	if m.options.StatePath != "" {
+		if err := SaveState(m.options.StatePath, state); err != nil {
+			m.mu.Lock()
+			m.state = previous
+			m.mu.Unlock()
+			return Snapshot{}, err
+		}
+	}
+	return m.Refresh()
+}
+
 func (m *Manager) Snapshot() Snapshot {
 	m.mu.RLock()
 	defer m.mu.RUnlock()

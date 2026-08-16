@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
-import { AddProxyNode, AddSubscription, ApplyCoreConfiguration, ApplySelectedProxyConfiguration, ConfigureRemoteRuleSet, ConfigureSRSSource, DeleteProxyNode, DeleteSRSSource, DeleteSubscription, ExportDiagnosticBundle, GetAutostartStatus, GetConnectionObservationEnabled, GetCoreStatus, GetDNSPresets, GetDNSSettings, GetInterfaceSnapshot, GetIPv6Policy, GetObservations, GetRecoveryStatus, GetRemoteRuleSet, GetSRSPresets, GetStatus, GetTrafficBudgetStatus, InspectProcessRules, ListProxyNodes, ListSRSSources, ListSubscriptions, PreviewCoreRules, PreviewDiagnosticBundle, RecordApplicationLog, RefreshRemoteRuleSet, RefreshSRSSource, RefreshSubscription, ResetTrafficBudget, ResetWindowsNetworkStack, RunHealthProbe, SelectInterfaces, SelectProxyNode, SetAutostartEnabled, SetConnectionObservationEnabled, SetDNSSettings, SetIPv6Policy, SetProxyNodeFavorite, SetTrafficBudget, SpeedTestProxyNodes, StopCore, TestDNSServer, TestProxyNode, UpdateProxyNode, UpdateSubscription, ValidateCoreConfiguration, ValidateSelectedProxyConfiguration } from '../wailsjs/go/main/App'
-import type { config, core, interfacemanager, interfaces, main, nodes, observability, processrules, rulesets, srssets, subscriptions } from '../wailsjs/go/models'
+import { AddProxyNode, AddSubscription, ApplyCoreConfiguration, ApplySelectedProxyConfiguration, ConfigureRemoteRuleSet, ConfigureSRSSource, DeleteProxyNode, DeleteSRSSource, DeleteSubscription, ExportDiagnosticBundle, GetApplicationConfigDirectory, GetAutostartStatus, GetConnectionObservationEnabled, GetCoreStatus, GetDNSPresets, GetDNSSettings, GetInterfaceSnapshot, GetIPv6Policy, GetObservations, GetRecoveryStatus, GetRemoteRuleSet, GetRuleSettings, GetSRSPresets, GetStatus, GetTrafficBudgetStatus, InspectProcessRules, ListProxyNodes, ListSRSSources, ListSubscriptions, MigrateRemoteRuleSet, PreviewCoreRules, PreviewDiagnosticBundle, RecordApplicationLog, RefreshRemoteRuleSet, RefreshSRSSource, RefreshSubscription, RepairApplicationSettings, ResetApplicationSettings, ResetInterfaceSelection, ResetTrafficBudget, ResetWindowsNetworkStack, RunHealthProbe, SelectInterfaces, SelectProxyNode, SetAutostartEnabled, SetConnectionObservationEnabled, SetDNSSettings, SetIPv6Policy, SetProxyNodeFavorite, SetRuleSettings, SetTrafficBudget, SpeedTestProxyNodes, StopCore, TestDNSServer, TestProxyNode, UpdateProxyNode, UpdateSubscription, ValidateCoreConfiguration, ValidateSelectedProxyConfiguration } from '../wailsjs/go/main/App'
+import type { config, core, interfacemanager, interfaces, main, nodes, observability, processrules, rulesets, rulesettings, srssets, subscriptions } from '../wailsjs/go/models'
 import { EventsOn } from '../wailsjs/runtime/runtime'
 import type { ApplicationStatus } from './vite-env'
 import { locale, setLocale, t, type Locale } from './i18n'
@@ -62,10 +62,14 @@ const ipv6Policy = ref<'block' | 'split'>('block')
 const ipv6Busy = ref(false)
 const networkResetBusy = ref(false)
 const networkResetResult = ref<main.NetworkResetResult>()
+const applicationResetBusy = ref(false)
+const initializationFailed = ref(false)
+const applicationConfigDirectory = ref('')
 const proxyNodes = ref<nodes.Node[]>([])
 const proxyFormOpen = ref(false)
 const proxyForm = ref({ id: '', name: '', type: 'http', server: '', port: 8080, username: '', password: '', clear_password: false })
 const selectedMode = ref<'direct-split' | 'proxy-split'>('direct-split')
+const defaultOutbound = ref<'a' | 'b'>('b')
 const proxyTests = ref<Record<string, nodes.TestResult>>({})
 const testingProxyID = ref('')
 const testingAllProxies = ref(false)
@@ -74,19 +78,23 @@ const subscriptionList = ref<subscriptions.Subscription[]>([])
 const subscriptionFormOpen = ref(false)
 const subscriptionForm = ref({ id: '', name: '', url: '' })
 const refreshingSubscriptionID = ref('')
-type CustomRule = { id: string; name: string; type: 'domain' | 'ip' | 'process-name' | 'process-path'; value: string; action: 'a' | 'b' | 'final' | 'reject' }
+type InlineRuleType = 'domain' | 'ip' | 'process-name' | 'process-path'
+type RuleAction = 'a' | 'b' | 'final' | 'reject'
+type CustomRule = { id: string; name: string; type: InlineRuleType; value: string; action: RuleAction; enabled: boolean }
+type RuleForm = { id: string; name: string; type: InlineRuleType | 'rule-set'; value: string; action: RuleAction; enabled: boolean }
 const customRules = ref<CustomRule[]>([])
+const ruleOrder = ref<string[]>([])
 const ruleFormOpen = ref(false)
-const ruleForm = ref<CustomRule>({ id: '', name: '', type: 'domain', value: '', action: 'a' })
+const ruleForm = ref<RuleForm>({ id: '', name: '', type: 'domain', value: '', action: 'a', enabled: true })
 const rulePreview = ref<config.RulePreview[]>([])
 const rulePreviewError = ref('')
 const processRuleStatuses = ref<processrules.Status[]>([])
 const remoteRuleSet = ref<rulesets.Source>()
 const remoteRuleForm = ref({ name: '', url: '', expected_sha256: '' })
 const remoteRuleBusy = ref(false)
+const legacyRemoteMigrated = ref(false)
 const srsPresets = ref<srssets.Preset[]>([])
 const srsSources = ref<srssets.Source[]>([])
-const srsFormOpen = ref(false)
 const srsBusyID = ref('')
 const srsForm = ref({ id: '', name: '', kind: 'domain', preset_id: '', url: '', expected_sha256: '', enabled: true, action: 'a' })
 let nextLogID = 1
@@ -95,16 +103,27 @@ let stopRecoveryEvents: (() => void) | undefined
 let stopTrayStartEvents: (() => void) | undefined
 let stopBudgetEvents: (() => void) | undefined
 let statusTimer: number | undefined
+let ruleSettingsSave = Promise.resolve()
+let ruleSettingsSaveError: unknown
 
 const candidates = computed(() => snapshot.value?.candidates ?? [])
 const selectedAdapterA = computed(() => adapterByGUID(selectedA.value))
 const selectedAdapterB = computed(() => adapterByGUID(selectedB.value))
-const customRulesForA = computed(() => customRules.value.filter(rule => rule.action === 'a'))
-const customRulesForB = computed(() => customRules.value.filter(rule => rule.action === 'b'))
-const customRulesOther = computed(() => customRules.value.filter(rule => rule.action === 'final' || rule.action === 'reject'))
-const srsForA = computed(() => srsSources.value.filter(source => source.action === 'a'))
-const srsForB = computed(() => srsSources.value.filter(source => source.action === 'b'))
-const srsOther = computed(() => srsSources.value.filter(source => source.action === 'final' || source.action === 'reject'))
+const geoRulesNotReady = computed(() => srsSources.value.filter(source => source.enabled && !source.applied_sha256))
+type MasterRow = { key: string; kind: 'custom'; rule: CustomRule } | { key: string; kind: 'srs'; source: srssets.Source }
+const masterRows = computed<MasterRow[]>(() => {
+  const rows: MasterRow[] = []
+  const seen = new Set<string>()
+  for (const key of ruleOrder.value) {
+    const rule = customRules.value.find(item => item.id === key)
+    if (rule) { rows.push({ key, kind: 'custom', rule }); seen.add(key); continue }
+    const source = srsSources.value.find(item => `srs:${item.id}` === key)
+    if (source) { rows.push({ key, kind: 'srs', source }); seen.add(key) }
+  }
+  for (const rule of customRules.value) if (!seen.has(rule.id)) rows.push({ key: rule.id, kind: 'custom', rule })
+  for (const source of srsSources.value) if (!seen.has(`srs:${source.id}`)) rows.push({ key: `srs:${source.id}`, kind: 'srs', source })
+  return rows
+})
 const hasSavedSelection = computed(() => snapshot.value?.interface_a.status === 'resolved' && snapshot.value?.interface_b.status === 'resolved')
 const selectionValid = computed(() => Boolean(selectedA.value && selectedB.value && selectedA.value !== selectedB.value && selectedAdapterA.value && selectedAdapterB.value))
 const isRunning = computed(() => coreStatus.value.state === 'running')
@@ -194,13 +213,13 @@ function formatRuleSetTime(value?: string): string {
 
 function resetSRSForm() {
   srsForm.value = { id: '', name: '', kind: 'domain', preset_id: '', url: '', expected_sha256: '', enabled: true, action: 'a' }
-  srsFormOpen.value = false
 }
 
 function chooseSRSPreset() {
   const preset = srsPresets.value.find(item => item.id === srsForm.value.preset_id)
   if (!preset) return
   srsForm.value.name = preset.name
+  ruleForm.value.name = preset.name
   srsForm.value.kind = preset.kind
   srsForm.value.url = preset.url
   srsForm.value.expected_sha256 = ''
@@ -208,14 +227,20 @@ function chooseSRSPreset() {
 
 function editSRSSource(source: srssets.Source) {
   srsForm.value = { id: source.id, name: source.name, kind: source.kind, preset_id: source.preset_id || '', url: source.url, expected_sha256: source.expected_sha256 || '', enabled: source.enabled, action: source.action }
-  srsFormOpen.value = true
+  ruleForm.value = { id: source.id, name: source.name, type: 'rule-set', value: '', action: source.action as RuleAction, enabled: source.enabled }
+  ruleFormOpen.value = true
 }
 
 async function submitSRSSource() {
   srsBusyID.value = srsForm.value.id || 'new'; error.value = ''; notice.value = ''
   try {
-    await ConfigureSRSSource({ ...srsForm.value, applied_sha256: '', size: 0, last_error: '', upstream: '', license: '' } as srssets.Source)
-    srsSources.value = await ListSRSSources(); notice.value = 'SRS 来源设置已保存。下载并验证成功前不会替换当前有效版本。'; resetSRSForm()
+    const configured = await ConfigureSRSSource({ ...srsForm.value, name: ruleForm.value.name, action: ruleForm.value.action, enabled: ruleForm.value.enabled, applied_sha256: '', size: 0, last_error: '', upstream: '', license: '' } as srssets.Source)
+    const key = `srs:${configured.id}`
+    if (!ruleOrder.value.includes(key)) ruleOrder.value.push(key)
+    srsSources.value = await ListSRSSources()
+    void saveRuleSettings()
+    notice.value = '规则集已保存。下载并验证成功前不会参与分流。'
+    resetRuleForm()
   } catch (reason) { error.value = `无法保存 SRS 来源：${messageOf(reason)}` }
   finally { srsBusyID.value = '' }
 }
@@ -227,9 +252,19 @@ async function refreshSRSSource(source: srssets.Source) {
   finally { srsBusyID.value = '' }
 }
 
+async function toggleSRSSource(source: srssets.Source) {
+  srsBusyID.value = source.id; error.value = ''; notice.value = ''
+  try {
+    await ConfigureSRSSource({ ...source, enabled: !source.enabled } as srssets.Source)
+    srsSources.value = await ListSRSSources()
+    notice.value = `${source.name} 已${source.enabled ? '停用' : '启用'}。`
+  } catch (reason) { error.value = `无法更新规则状态：${messageOf(reason)}` }
+  finally { srsBusyID.value = '' }
+}
+
 async function deleteSRSSource(source: srssets.Source) {
   if (!window.confirm(`删除 SRS 来源“${source.name}”？`)) return
-  try { await DeleteSRSSource(source.id); srsSources.value = await ListSRSSources(); notice.value = '自定义 SRS 来源已删除。' }
+  try { await DeleteSRSSource(source.id); srsSources.value = await ListSRSSources(); ruleOrder.value = ruleOrder.value.filter(key => key !== `srs:${source.id}`); await saveRuleSettings(); notice.value = '自定义规则集已删除。' }
   catch (reason) { error.value = `无法删除 SRS 来源：${messageOf(reason)}` }
 }
 
@@ -341,12 +376,33 @@ function recommendationActionText(action: DiagnosticRecommendation['action']) {
   return { interfaces: '检查网卡', probe: '重新探测', export: '准备诊断包', none: '' }[action]
 }
 
-function saveCustomRules() {
-  localStorage.setItem('winrouter.customRules.v1', JSON.stringify(customRules.value))
+function saveRuleSettings(): Promise<void> {
+  const snapshot = {
+    schema_version: 1,
+    initialized: true,
+    legacy_remote_migrated: legacyRemoteMigrated.value,
+    default_outbound: defaultOutbound.value,
+    rules: customRules.value.map(rule => ({ ...rule })),
+    rule_order: [...ruleOrder.value],
+  } as rulesettings.Settings
+  ruleSettingsSave = ruleSettingsSave.then(async () => {
+    await SetRuleSettings(snapshot)
+    ruleSettingsSaveError = undefined
+    localStorage.removeItem('winrouter.customRules.v1')
+    localStorage.removeItem('winrouter.ruleOrder.v1')
+    localStorage.removeItem('winrouter.default-outbound.v1')
+  }).catch(reason => { ruleSettingsSaveError = reason; error.value = `无法保存规则设置：${messageOf(reason)}` })
+  return ruleSettingsSave
+}
+
+async function flushRuleSettings(): Promise<void> {
+  await ruleSettingsSave
+  if (ruleSettingsSaveError) throw ruleSettingsSaveError
 }
 
 function resetRuleForm() {
-  ruleForm.value = { id: '', name: '', type: 'domain', value: '', action: 'a' }
+  ruleForm.value = { id: '', name: '', type: 'domain', value: '', action: 'a', enabled: true }
+  resetSRSForm()
   ruleFormOpen.value = false
 }
 
@@ -355,23 +411,50 @@ function editCustomRule(rule: CustomRule) {
   ruleFormOpen.value = true
 }
 
-function submitCustomRule() {
-  const next = { ...ruleForm.value, id: ruleForm.value.id || crypto.randomUUID() }
+function moveMasterRule(key: string, direction: -1 | 1) {
+  const index = ruleOrder.value.indexOf(key)
+  const target = index + direction
+  if (index < 0 || target < 0 || target >= ruleOrder.value.length) return
+  const next = [...ruleOrder.value]
+  const [item] = next.splice(index, 1)
+  next.splice(target, 0, item)
+  ruleOrder.value = next
+  void saveRuleSettings()
+}
+
+function toggleCustomRule(rule: CustomRule) {
+  rule.enabled = !rule.enabled
+  void saveRuleSettings()
+}
+
+async function submitRule() {
+  if (ruleForm.value.type === 'rule-set') {
+    await submitSRSSource()
+    return
+  }
+  const next: CustomRule = { ...ruleForm.value, type: ruleForm.value.type as InlineRuleType, id: ruleForm.value.id || crypto.randomUUID() }
   const index = customRules.value.findIndex(rule => rule.id === next.id)
+  next.enabled = next.enabled !== false
   if (index >= 0) customRules.value[index] = next
   else customRules.value.push(next)
-  saveCustomRules()
+  if (!ruleOrder.value.includes(next.id)) ruleOrder.value.push(next.id)
+  void saveRuleSettings()
   resetRuleForm()
 }
 
 function deleteCustomRule(id: string) {
   customRules.value = customRules.value.filter(rule => rule.id !== id)
-  saveCustomRules()
+  ruleOrder.value = ruleOrder.value.filter(key => key !== id)
+  void saveRuleSettings()
+}
+
+function ruleTypeText(type: InlineRuleType) {
+  return ({ domain: '域名', ip: 'IP/CIDR', 'process-name': '进程', 'process-path': '进程路径' } as Record<InlineRuleType, string>)[type]
 }
 
 async function refreshRulePreview() {
   rulePreviewError.value = ''
-  try { const input = buildConfig(); rulePreview.value = await PreviewCoreRules(input); processRuleStatuses.value = await InspectProcessRules(input) }
+  try { await flushRuleSettings(); const input = buildConfig(); rulePreview.value = await PreviewCoreRules(input); processRuleStatuses.value = await InspectProcessRules(input) }
   catch (reason) { rulePreview.value = []; processRuleStatuses.value = []; rulePreviewError.value = messageOf(reason) }
 }
 
@@ -388,6 +471,21 @@ async function refreshRemoteRules() {
   remoteRuleBusy.value = true; error.value = ''; notice.value = ''
   try { remoteRuleSet.value = await RefreshRemoteRuleSet(); notice.value = `远程规则已验证：${remoteRuleSet.value.rule_count} 条。`; await refreshRulePreview() }
   catch (reason) { error.value = `规则更新失败，已保留最后有效版本：${messageOf(reason)}`; remoteRuleSet.value = await GetRemoteRuleSet() }
+  finally { remoteRuleBusy.value = false }
+}
+
+async function migrateRemoteRules() {
+  remoteRuleBusy.value = true; error.value = ''; notice.value = ''
+  try {
+    await flushRuleSettings()
+    const migrated = await MigrateRemoteRuleSet()
+    customRules.value = migrated.rules as CustomRule[]
+    ruleOrder.value = [...migrated.rule_order]
+    defaultOutbound.value = migrated.default_outbound as 'a' | 'b'
+    legacyRemoteMigrated.value = Boolean(migrated.legacy_remote_migrated)
+    notice.value = `已将 ${remoteRuleSet.value?.rule_count ?? 0} 条旧版远程规则迁移到统一规则列表。`
+    await refreshRulePreview()
+  } catch (reason) { error.value = `无法迁移旧版远程规则：${messageOf(reason)}` }
   finally { remoteRuleBusy.value = false }
 }
 
@@ -551,8 +649,10 @@ function buildConfig(): config.MVPConfig {
     tun: { prefix: snapshot.value.tun.prefix, stack: 'system' },
     interface_a: { guid: interfaceA.guid, bind_interface: interfaceA.friendly_name },
     interface_b: { guid: interfaceB.guid, bind_interface: interfaceB.friendly_name },
+    default_outbound: defaultOutbound.value,
     direct_prefixes: directPrefixes.value.map(item => ({ prefix: item.prefix, bind_interface: item.adapter_name })),
-    custom_rules: customRules.value.map(({ name, type, value, action }) => ({ name, type, value, action })),
+    rule_order: ruleOrder.value,
+    custom_rules: customRules.value.filter(rule => rule.enabled).map(({ id, name, type, value, action }) => ({ id, name, type, value, action })),
     domestic: { cidrs: [], domain_suffixes: [] },
     dns: { domestic: { ...dnsSettings.value.domestic }, global: { ...dnsSettings.value.global } },
     ...(selectedMode.value === 'proxy-split' ? { proxy: { type: 'http', server: '0.0.0.0', port: 1 } } : {}),
@@ -560,9 +660,19 @@ function buildConfig(): config.MVPConfig {
   } as unknown as config.MVPConfig
 }
 
+function updateDefaultOutbound(value: 'a' | 'b') {
+  defaultOutbound.value = value
+  void saveRuleSettings()
+}
+
 async function startCore() {
   error.value = ''
   notice.value = ''
+  if (geoRulesNotReady.value.length) {
+    error.value = `以下规则集尚无可用数据：${geoRulesNotReady.value.map(source => source.name).join('、')}。请先完成更新。`
+    view.value = 'rules'
+    return
+  }
   if (!hasSavedSelection.value || blockingDiagnostics.value.length) {
     error.value = '预检未通过。请先完成网卡选择并处理错误诊断。'
     view.value = 'interfaces'
@@ -570,6 +680,7 @@ async function startCore() {
   }
   busy.value = true
   try {
+    await flushRuleSettings()
     const input = buildConfig()
     if (selectedMode.value === 'proxy-split') await ValidateSelectedProxyConfiguration(input)
     else await ValidateCoreConfiguration(input)
@@ -657,6 +768,54 @@ async function resetWindowsNetworkStack() {
     networkResetBusy.value = false
   }
 }
+async function resetSavedInterfaces() {
+  if (!window.confirm('清除已保存的出口 A/B 网卡选择？规则、DNS、代理节点和订阅都会保留。分流核心将停止。')) return
+  applicationResetBusy.value = true; error.value = ''; notice.value = ''
+  try {
+    syncSelection(await ResetInterfaceSelection())
+    coreStatus.value = { ...coreStatus.value, state: 'stopped', pid: 0 }
+    notice.value = '网卡选择已重置，请重新选择出口 A 和 B。'
+    view.value = 'interfaces'
+  } catch (reason) { error.value = `无法重置网卡选择：${messageOf(reason)}` }
+  finally { applicationResetBusy.value = false }
+}
+async function resetApplicationSettings() {
+  if (!window.confirm('恢复应用默认设置？这会停止核心并重置网卡选择、规则、DNS 和 IPv6 策略。代理节点、订阅、规则集来源及流量统计会保留。')) return
+  if (!window.confirm('重置前会自动备份当前配置。确认继续？')) return
+  applicationResetBusy.value = true; error.value = ''; notice.value = ''
+  try {
+    const backup = await ResetApplicationSettings()
+    syncSelection(await GetInterfaceSnapshot())
+    const storedRules = await GetRuleSettings()
+    customRules.value = Array.isArray(storedRules.rules) ? storedRules.rules as CustomRule[] : []
+    ruleOrder.value = Array.isArray(storedRules.rule_order) ? [...storedRules.rule_order] : []
+    defaultOutbound.value = storedRules.default_outbound as 'a' | 'b'
+    legacyRemoteMigrated.value = Boolean(storedRules.legacy_remote_migrated)
+    dnsSettings.value = normalizeDNSSettings(await GetDNSSettings() as DNSSettings)
+    ipv6Policy.value = await GetIPv6Policy() as 'block' | 'split'
+    coreStatus.value = { ...coreStatus.value, state: 'stopped', pid: 0 }
+    notice.value = `应用设置已恢复默认值。原配置备份于：${backup}`
+  } catch (reason) { error.value = `无法恢复应用默认设置：${messageOf(reason)}` }
+  finally { applicationResetBusy.value = false }
+}
+async function repairApplicationSettings() {
+  if (!window.confirm('强制修复会备份并重建网卡选择、规则和 DNS 配置文件。代理节点、订阅及规则集来源会保留。修复后必须重启 WinRouter，是否继续？')) return
+  applicationResetBusy.value = true; notice.value = ''
+  try {
+    const backup = await RepairApplicationSettings()
+    initializationFailed.value = false
+    error.value = ''
+    notice.value = `配置文件已修复，原文件备份于：${backup}。请退出并重新启动 WinRouter。`
+  } catch (reason) { error.value = `无法强制修复应用配置：${messageOf(reason)}` }
+  finally { applicationResetBusy.value = false }
+}
+async function copyApplicationConfigDirectory() {
+  if (!applicationConfigDirectory.value) return
+  try {
+    await navigator.clipboard.writeText(applicationConfigDirectory.value)
+    notice.value = '配置目录路径已复制。'
+  } catch (reason) { error.value = `无法复制配置目录路径：${messageOf(reason)}` }
+}
 function chooseDNSPreset(scope: 'domestic' | 'global') {
   const target = dnsSettings.value[scope]
   if (!target.preset_id) return
@@ -693,16 +852,23 @@ function trafficHeight(value: number, role: 'A' | 'B') {
 }
 
 onMounted(async () => {
+	try { applicationConfigDirectory.value = await GetApplicationConfigDirectory() } catch { applicationConfigDirectory.value = '' }
+	let legacyRules: CustomRule[] = []
+	let legacyOrder: string[] = []
+	const legacyOutbound: 'a' | 'b' = localStorage.getItem('winrouter.default-outbound.v1') === 'a' ? 'a' : 'b'
   try {
     const storedBaselines = JSON.parse(localStorage.getItem('winrouter.trafficBaselines.v1') || '{}')
     if (storedBaselines && typeof storedBaselines === 'object' && !Array.isArray(storedBaselines)) usageBaselines.value = storedBaselines
   } catch { localStorage.removeItem('winrouter.trafficBaselines.v1') }
   try {
     const stored = JSON.parse(localStorage.getItem('winrouter.customRules.v1') || '[]')
-    if (Array.isArray(stored)) customRules.value = stored.slice(0, 200)
+    if (Array.isArray(stored)) legacyRules = stored.slice(0, 200).filter(rule => !['geoip', 'geosite'].includes(rule.type)).map(rule => ({ ...rule, enabled: rule.enabled !== false }))
+    const storedOrder = JSON.parse(localStorage.getItem('winrouter.ruleOrder.v1') || '[]')
+    if (Array.isArray(storedOrder)) legacyOrder = storedOrder.filter(id => typeof id === 'string')
+    for (const rule of legacyRules) if (!legacyOrder.includes(rule.id)) legacyOrder.push(rule.id)
   } catch { localStorage.removeItem('winrouter.customRules.v1') }
   try {
-    const [appStatus, interfaceSnapshot, status, recovery, observed, autostart, budget, storedDNS, presets, storedIPv6] = await Promise.all([GetStatus(), GetInterfaceSnapshot(), GetCoreStatus(), GetRecoveryStatus(), GetObservations(), GetAutostartStatus(), GetTrafficBudgetStatus(), GetDNSSettings(), GetDNSPresets(), GetIPv6Policy()])
+    const [appStatus, interfaceSnapshot, status, recovery, observed, autostart, budget, storedDNS, presets, storedIPv6, storedRules] = await Promise.all([GetStatus(), GetInterfaceSnapshot(), GetCoreStatus(), GetRecoveryStatus(), GetObservations(), GetAutostartStatus(), GetTrafficBudgetStatus(), GetDNSSettings(), GetDNSPresets(), GetIPv6Policy(), GetRuleSettings()])
     app.value = appStatus
     syncSelection(interfaceSnapshot)
     coreStatus.value = status
@@ -715,14 +881,23 @@ onMounted(async () => {
     dnsSettings.value = normalizeDNSSettings(storedDNS as DNSSettings)
     dnsPresets.value = presets as DNSPreset[]
     ipv6Policy.value = storedIPv6 as 'block' | 'split'
+    customRules.value = (storedRules.initialized && Array.isArray(storedRules.rules) ? storedRules.rules : legacyRules) as CustomRule[]
+    ruleOrder.value = [...(storedRules.initialized && Array.isArray(storedRules.rule_order) ? storedRules.rule_order : legacyOrder)]
+    defaultOutbound.value = (storedRules.initialized ? storedRules.default_outbound : legacyOutbound) as 'a' | 'b'
+    legacyRemoteMigrated.value = Boolean(storedRules.legacy_remote_migrated)
     proxyNodes.value = await ListProxyNodes()
     subscriptionList.value = await ListSubscriptions()
     remoteRuleSet.value = await GetRemoteRuleSet()
     remoteRuleForm.value = { name: remoteRuleSet.value.name || '', url: remoteRuleSet.value.url || '', expected_sha256: remoteRuleSet.value.expected_sha256 || '' }
     srsPresets.value = await GetSRSPresets()
     srsSources.value = await ListSRSSources()
+    for (const source of srsSources.value) if (!ruleOrder.value.includes(`srs:${source.id}`)) ruleOrder.value.push(`srs:${source.id}`)
+    const validRuleKeys = new Set([...customRules.value.map(rule => rule.id), ...srsSources.value.map(source => `srs:${source.id}`)])
+    ruleOrder.value = ruleOrder.value.filter(key => validRuleKeys.has(key))
+    await saveRuleSettings()
     addLog('info', `应用已就绪，发现 ${interfaceSnapshot.candidates.length} 块候选网卡。`)
   } catch (reason) {
+    initializationFailed.value = true
     error.value = `初始化失败：${messageOf(reason)}`
     addLog('error', error.value, true)
   }
@@ -778,6 +953,10 @@ onBeforeUnmount(() => {
       </header>
 
       <div v-if="error" class="banner error" role="alert"><strong>{{ t('banner.failed') }}</strong><span>{{ error }}</span><button type="button" :aria-label="t('common.closeError')" @click="error = ''">×</button></div>
+      <section v-if="initializationFailed" class="setup-callout" aria-label="启动恢复模式">
+        <div><p class="section-kicker">恢复模式</p><h2>应用配置未能加载</h2><p>可备份并重建基础配置文件。代理节点、订阅和规则集来源不会被删除，修复后需要重启 WinRouter。</p><code v-if="applicationConfigDirectory">{{ applicationConfigDirectory }}</code></div>
+        <button type="button" class="danger-button" :disabled="applicationResetBusy" @click="repairApplicationSettings">{{ applicationResetBusy ? '正在修复' : '强制修复配置' }}</button>
+      </section>
       <div v-if="notice" class="banner success" role="status"><strong>{{ t('banner.success') }}</strong><span>{{ notice }}</span><button type="button" :aria-label="t('common.closeNotice')" @click="notice = ''">×</button></div>
 
       <template v-if="view === 'overview'">
@@ -882,59 +1061,95 @@ onBeforeUnmount(() => {
           <div><span>{{ selectedAdapterB?.friendly_name ?? '网卡 B' }} DNS</span><strong>{{ dnsSettings.global.type.toUpperCase() }} · {{ dnsSettings.global.server }}:{{ dnsSettings.global.port }}</strong></div>
           <div><span>缓存策略</span><strong>按上游独立缓存</strong></div>
         </section>
+        <section class="fallback-outbound" aria-label="未匹配流量兜底出口">
+          <div><strong>未匹配流量兜底出口</strong><small>未命中自定义规则的流量将从此网卡发出；指定网卡 B 的规则仍优先使用 B。</small></div>
+          <select :value="defaultOutbound" :disabled="selectedMode === 'proxy-split' || isRunning" @change="updateDefaultOutbound(($event.target as HTMLSelectElement).value as 'a' | 'b')">
+            <option value="a">网卡 A · {{ selectedAdapterA?.friendly_name ?? '未选择' }}</option>
+            <option value="b">网卡 B · {{ selectedAdapterB?.friendly_name ?? '未选择' }}</option>
+          </select>
+        </section>
         <section class="rules-heading">
           <div><p class="section-kicker">按实际出口配置</p><h2>用户覆盖规则</h2><p>为 IP、域名或进程指定实际网卡；系统防环路和本地网络规则始终优先。</p></div>
           <button class="primary" type="button" @click="ruleFormOpen ? resetRuleForm() : ruleFormOpen = true">{{ ruleFormOpen ? '取消' : '添加规则' }}</button>
         </section>
-        <form v-if="ruleFormOpen" class="rule-form" @submit.prevent="submitCustomRule">
+        <form v-if="ruleFormOpen" class="rule-form" @submit.prevent="submitRule">
           <label>名称<input v-model.trim="ruleForm.name" required maxlength="80" placeholder="例如：阻止广告域名"></label>
-          <label>匹配类型<select v-model="ruleForm.type"><option value="domain">域名后缀</option><option value="ip">IPv4 CIDR</option><option value="process-name">进程名称</option><option value="process-path">进程完整路径</option></select></label>
-          <label>匹配值<input v-model.trim="ruleForm.value" required :placeholder="ruleForm.type === 'domain' ? 'example.com' : ruleForm.type === 'ip' ? '203.0.113.0/24' : ruleForm.type === 'process-name' ? 'browser.exe' : 'C:\\Program Files\\Browser\\browser.exe'"></label>
+          <label>匹配类型<select v-model="ruleForm.type" :disabled="Boolean(ruleForm.id)"><option value="domain">域名后缀</option><option value="ip">IPv4 CIDR</option><option value="process-name">进程名称</option><option value="process-path">进程完整路径</option><option value="rule-set">规则集（geoip / geosite / SRS）</option></select></label>
+          <label v-if="ruleForm.type !== 'rule-set'">匹配值<input v-model.trim="ruleForm.value" required :placeholder="ruleForm.type === 'domain' ? 'example.com' : ruleForm.type === 'ip' ? '203.0.113.0/24' : ruleForm.type === 'process-name' ? 'browser.exe' : 'C:\\Program Files\\Browser\\browser.exe'"></label>
+          <label v-else>来源预设<select v-model="srsForm.preset_id" @change="chooseSRSPreset"><option value="">自定义 HTTPS 地址</option><option v-for="preset in srsPresets" :key="preset.id" :value="preset.id">{{ preset.name }}</option></select></label>
           <label>目标<select v-model="ruleForm.action"><option value="a">{{ selectedAdapterA?.friendly_name ?? '网卡 A' }}</option><option value="b">{{ selectedAdapterB?.friendly_name ?? '网卡 B' }}</option><option value="final">当前模式最终出口</option><option value="reject">拒绝</option></select></label>
-          <div class="rule-form-actions"><button class="secondary" type="button" @click="resetRuleForm">取消</button><button class="primary" type="submit">{{ ruleForm.id ? '保存修改' : '添加规则' }}</button></div>
+          <template v-if="ruleForm.type === 'rule-set'">
+            <label>数据类型<select v-model="srsForm.kind" :disabled="Boolean(srsForm.preset_id)"><option value="domain">域名集合 / geosite</option><option value="ip">IP 集合 / geoip</option></select></label>
+            <label class="remote-url">固定 HTTPS 地址<input v-model.trim="srsForm.url" required type="url" :readonly="Boolean(srsForm.preset_id)" placeholder="https://example.com/rules.srs"></label>
+            <label class="remote-hash">预期 SHA-256 <small>{{ srsForm.preset_id ? '内置预设可留空' : '自定义来源必须填写' }}</small><input v-model.trim="srsForm.expected_sha256" :required="!srsForm.preset_id" minlength="64" maxlength="64"></label>
+          </template>
+          <label class="toggle-label"><input v-model="ruleForm.enabled" type="checkbox"><span>启用规则</span></label>
+          <div class="rule-form-actions"><button class="secondary" type="button" @click="resetRuleForm">取消</button><button class="primary" type="submit" :disabled="Boolean(srsBusyID)">{{ ruleForm.id ? '保存修改' : '添加规则' }}</button></div>
         </form>
-        <section class="outlet-rule-columns" aria-label="按网卡分组的规则">
-          <article class="outlet-rule-group">
-            <header><span>目标网卡</span><h3>{{ selectedAdapterA?.friendly_name ?? '网卡 A' }}</h3><small>匹配后由此接口发出</small></header>
-            <div v-if="!customRulesForA.length && !srsForA.length" class="outlet-rule-empty">尚无规则</div>
-            <div v-for="rule in customRulesForA" :key="rule.id" class="outlet-rule-item"><div><strong>{{ rule.name }}</strong><small>{{ rule.value }}</small></div><span>{{ { domain: '域名', ip: 'IP/CIDR', 'process-name': '进程', 'process-path': '进程路径' }[rule.type] }}</span><div class="proxy-actions"><button class="secondary" type="button" @click="editCustomRule(rule)">编辑</button><button class="delete-button" type="button" @click="deleteCustomRule(rule.id)">删除</button></div></div>
-            <div v-for="source in srsForA" :key="source.id" class="outlet-rule-item srs"><div><strong>{{ source.name }}</strong><small>{{ source.kind === 'domain' ? '域名 SRS' : 'IP SRS' }} · {{ source.upstream || '自定义来源' }}</small></div><span>{{ source.enabled ? (source.applied_sha256 ? '已验证' : '待下载') : '已停用' }}</span><div class="proxy-actions"><button class="secondary" type="button" @click="editSRSSource(source)">设置</button><button class="secondary" type="button" :disabled="srsBusyID === source.id" @click="refreshSRSSource(source)">更新</button></div></div>
-          </article>
-          <article class="outlet-rule-group">
-            <header><span>目标网卡</span><h3>{{ selectedAdapterB?.friendly_name ?? '网卡 B' }}</h3><small>匹配后由此接口发出</small></header>
-            <div v-if="!customRulesForB.length && !srsForB.length" class="outlet-rule-empty">尚无规则</div>
-            <div v-for="rule in customRulesForB" :key="rule.id" class="outlet-rule-item"><div><strong>{{ rule.name }}</strong><small>{{ rule.value }}</small></div><span>{{ { domain: '域名', ip: 'IP/CIDR', 'process-name': '进程', 'process-path': '进程路径' }[rule.type] }}</span><div class="proxy-actions"><button class="secondary" type="button" @click="editCustomRule(rule)">编辑</button><button class="delete-button" type="button" @click="deleteCustomRule(rule.id)">删除</button></div></div>
-            <div v-for="source in srsForB" :key="source.id" class="outlet-rule-item srs"><div><strong>{{ source.name }}</strong><small>{{ source.kind === 'domain' ? '域名 SRS' : 'IP SRS' }} · {{ source.upstream || '自定义来源' }}</small></div><span>{{ source.enabled ? (source.applied_sha256 ? '已验证' : '待下载') : '已停用' }}</span><div class="proxy-actions"><button class="secondary" type="button" @click="editSRSSource(source)">设置</button><button class="secondary" type="button" :disabled="srsBusyID === source.id" @click="refreshSRSSource(source)">更新</button></div></div>
+        <section class="rule-master-list" aria-label="规则总表">
+          <div class="rules-heading"><div><p class="section-kicker">唯一编辑入口</p><h2>分流规则总表</h2><p>规则按从上到下的顺序匹配，第一条命中后停止；网卡 A/B 区域仅展示生成结果。</p></div></div>
+          <div v-if="!masterRows.length" class="outlet-rule-empty">尚未添加规则</div>
+          <article v-for="(row, index) in masterRows" :key="row.key" :class="['master-rule-item', { disabled: row.kind === 'custom' ? !row.rule.enabled : !row.source.enabled }]">
+            <strong class="master-rule-order">{{ index + 1 }}</strong>
+            <template v-if="row.kind === 'custom'">
+              <label class="master-rule-enabled"><input type="checkbox" :checked="row.rule.enabled" @change="toggleCustomRule(row.rule)"><span>{{ row.rule.enabled ? '启用' : '停用' }}</span></label>
+              <div><strong>{{ row.rule.name }}</strong><small>{{ ruleTypeText(row.rule.type) }} · {{ row.rule.value }}</small></div>
+              <span>{{ row.rule.action === 'a' ? `网卡 A · ${selectedAdapterA?.friendly_name ?? ''}` : row.rule.action === 'b' ? `网卡 B · ${selectedAdapterB?.friendly_name ?? ''}` : row.rule.action === 'reject' ? '拒绝' : '兜底出口' }}</span>
+              <div class="proxy-actions"><button class="secondary" type="button" @click="moveMasterRule(row.key, -1)" :disabled="index === 0">上移</button><button class="secondary" type="button" @click="moveMasterRule(row.key, 1)" :disabled="index === masterRows.length - 1">下移</button><button class="secondary" type="button" @click="editCustomRule(row.rule)">编辑</button><button class="delete-button" type="button" @click="deleteCustomRule(row.rule.id)">删除</button></div>
+            </template>
+            <template v-else>
+              <label class="master-rule-enabled"><input type="checkbox" :checked="row.source.enabled" :disabled="srsBusyID === row.source.id" @change="toggleSRSSource(row.source)"><span>{{ row.source.enabled ? '启用' : '停用' }}</span></label>
+              <div><strong>{{ row.source.name }}</strong><small>{{ row.source.kind === 'domain' ? 'geosite / 域名集合' : 'geoip / IP 集合' }} · {{ row.source.applied_sha256 ? '数据集已验证' : row.source.last_error ? '下载失败，暂无缓存' : '待下载' }}</small></div>
+              <span>{{ row.source.action === 'a' ? `网卡 A · ${selectedAdapterA?.friendly_name ?? ''}` : row.source.action === 'b' ? `网卡 B · ${selectedAdapterB?.friendly_name ?? ''}` : row.source.action === 'reject' ? '拒绝' : '兜底出口' }}</span>
+              <div class="proxy-actions"><button class="secondary" type="button" @click="moveMasterRule(row.key, -1)" :disabled="index === 0">上移</button><button class="secondary" type="button" @click="moveMasterRule(row.key, 1)" :disabled="index === masterRows.length - 1">下移</button><button class="secondary" type="button" @click="editSRSSource(row.source)">编辑</button><button class="secondary" type="button" :disabled="srsBusyID === row.source.id" @click="refreshSRSSource(row.source)">{{ srsBusyID === row.source.id ? '校验中' : '更新' }}</button><button v-if="!row.source.preset_id" class="delete-button" type="button" @click="deleteSRSSource(row.source)">删除</button></div>
+            </template>
           </article>
         </section>
-        <section v-if="customRulesOther.length || srsOther.length" class="other-rules"><h3>最终出口与拒绝规则</h3><div v-for="rule in customRulesOther" :key="rule.id"><strong>{{ rule.name }}</strong><code>{{ rule.value }}</code><span>{{ rule.action === 'reject' ? '拒绝' : '模式最终出口' }}</span></div><div v-for="source in srsOther" :key="source.id"><strong>{{ source.name }}</strong><code>{{ source.url }}</code><span>{{ source.action === 'reject' ? '拒绝' : '模式最终出口' }}</span></div></section>
+        <section class="outlet-rule-columns" aria-label="出口 DNS 设置">
+          <article class="outlet-rule-group">
+            <header><span>出口 A DNS</span><h3>{{ selectedAdapterA?.friendly_name ?? '网卡 A' }}</h3><small>管理该出口使用的域名解析服务</small></header>
+            <details class="outlet-dns-settings">
+              <summary class="outlet-dns-heading"><strong>出口 A DNS</strong><small>{{ dnsSettings.domestic.type.toUpperCase() }} · {{ dnsSettings.domestic.server }}:{{ dnsSettings.domestic.port }}</small></summary>
+              <div class="dns-row">
+                <label>DNS 预设<select v-model="dnsSettings.domestic.preset_id" :disabled="dnsBusy" @change="dnsSettings.domestic.preset_id ? chooseDNSPreset('domestic') : setCustomDNS('domestic')"><option value="">自定义</option><option v-for="preset in dnsPresets.filter(item => item.scope === 'domestic')" :key="preset.id" :value="preset.id">{{ preset.name }}</option></select></label>
+                <label>协议<select v-model="dnsSettings.domestic.type" :disabled="dnsBusy || Boolean(dnsSettings.domestic.preset_id)" @change="setCustomDNS('domestic')"><option value="udp">UDP</option><option value="tls">DoT</option><option value="https">DoH</option></select></label>
+                <label>服务器 IP<input v-model.trim="dnsSettings.domestic.server" required :readonly="Boolean(dnsSettings.domestic.preset_id)" placeholder="1.1.1.1" @input="setCustomDNS('domestic')"></label>
+                <label>端口<input v-model.number="dnsSettings.domestic.port" type="number" min="1" max="65535" required :readonly="Boolean(dnsSettings.domestic.preset_id)" @input="setCustomDNS('domestic')"></label>
+                <label :class="{ 'dns-field-placeholder': dnsSettings.domestic.type === 'udp' }">TLS 域名<input v-model.trim="dnsSettings.domestic.server_name" :required="dnsSettings.domestic.type !== 'udp'" :disabled="dnsSettings.domestic.type === 'udp'" :readonly="Boolean(dnsSettings.domestic.preset_id)" :placeholder="dnsSettings.domestic.type === 'udp' ? 'UDP 不需要' : 'dns.example.com'" @input="setCustomDNS('domestic')"></label>
+                <button type="button" class="dns-test" :class="dnsTests.domestic" :disabled="dnsTests.domestic === 'testing' || dnsBusy || isRunning" @click="testDNSServer('domestic')">{{ dnsTests.domestic === 'testing' ? '测试中' : dnsTests.domestic === 'success' ? '成功' : dnsTests.domestic === 'failed' ? '失败' : '测试' }}</button>
+              </div>
+              <div class="dns-actions"><button type="button" class="primary" :disabled="dnsBusy || isRunning" @click="saveDNSSettings">{{ dnsBusy ? '正在校验' : '保存 A DNS' }}</button></div>
+            </details>
+          </article>
+          <article class="outlet-rule-group">
+            <header><span>出口 B DNS</span><h3>{{ selectedAdapterB?.friendly_name ?? '网卡 B' }}</h3><small>管理该出口使用的域名解析服务</small></header>
+            <details class="outlet-dns-settings">
+              <summary class="outlet-dns-heading"><strong>出口 B DNS</strong><small>{{ dnsSettings.global.type.toUpperCase() }} · {{ dnsSettings.global.server }}:{{ dnsSettings.global.port }}</small></summary>
+              <div class="dns-row">
+                <label>DNS 预设<select v-model="dnsSettings.global.preset_id" :disabled="dnsBusy" @change="dnsSettings.global.preset_id ? chooseDNSPreset('global') : setCustomDNS('global')"><option value="">自定义</option><option v-for="preset in dnsPresets.filter(item => item.scope === 'global')" :key="preset.id" :value="preset.id">{{ preset.name }}</option></select></label>
+                <label>协议<select v-model="dnsSettings.global.type" :disabled="dnsBusy || Boolean(dnsSettings.global.preset_id)" @change="setCustomDNS('global')"><option value="udp">UDP</option><option value="tls">DoT</option><option value="https">DoH</option></select></label>
+                <label>服务器 IP<input v-model.trim="dnsSettings.global.server" required :readonly="Boolean(dnsSettings.global.preset_id)" placeholder="1.1.1.1" @input="setCustomDNS('global')"></label>
+                <label>端口<input v-model.number="dnsSettings.global.port" type="number" min="1" max="65535" required :readonly="Boolean(dnsSettings.global.preset_id)" @input="setCustomDNS('global')"></label>
+                <label :class="{ 'dns-field-placeholder': dnsSettings.global.type === 'udp' }">TLS 域名<input v-model.trim="dnsSettings.global.server_name" :required="dnsSettings.global.type !== 'udp'" :disabled="dnsSettings.global.type === 'udp'" :readonly="Boolean(dnsSettings.global.preset_id)" :placeholder="dnsSettings.global.type === 'udp' ? 'UDP 不需要' : 'dns.example.com'" @input="setCustomDNS('global')"></label>
+                <button type="button" class="dns-test" :class="dnsTests.global" :disabled="dnsTests.global === 'testing' || dnsBusy || isRunning" @click="testDNSServer('global')">{{ dnsTests.global === 'testing' ? '测试中' : dnsTests.global === 'success' ? '成功' : dnsTests.global === 'failed' ? '失败' : '测试' }}</button>
+              </div>
+              <div class="dns-actions"><button type="button" class="primary" :disabled="dnsBusy || isRunning" @click="saveDNSSettings">{{ dnsBusy ? '正在校验' : '保存 B DNS' }}</button></div>
+            </details>
+          </article>
+        </section>
         <p v-if="customRules.some(rule => rule.type.startsWith('process-'))" class="process-note">进程名称可跨重启保持匹配；同名程序请使用完整路径。子进程不会隐式继承，请为实际联网的子进程单独添加规则。路径变化或无法识别时流量仍受基础域名/IP策略约束。</p>
         <section v-if="processRuleStatuses.length" class="process-statuses" aria-label="进程规则状态">
           <div v-for="status in processRuleStatuses" :key="`${status.type}-${status.value}`" :class="status.state"><strong>{{ status.value }}</strong><span>{{ status.message }}</span><small v-if="status.paths?.length">{{ status.paths.join('、') }}</small></div>
         </section>
-        <section class="srs-manager">
-          <div class="rules-heading"><div><p class="section-kicker">sing-box 原生格式</p><h2>SRS 数据集</h2><p>内置中国域名/IP预设，也可添加固定 HTTPS 自定义来源。文件由 WinRouter下载并校验后供核心本地加载。</p></div><button class="primary" type="button" @click="srsFormOpen ? resetSRSForm() : srsFormOpen = true">{{ srsFormOpen ? '取消' : '添加自定义 SRS' }}</button></div>
-          <form v-if="srsFormOpen" class="rule-form srs-form" @submit.prevent="submitSRSSource">
-            <label>来源预设<select v-model="srsForm.preset_id" @change="chooseSRSPreset"><option value="">自定义 HTTPS 地址</option><option v-for="preset in srsPresets" :key="preset.id" :value="preset.id">{{ preset.name }}</option></select></label>
-            <label>名称<input v-model.trim="srsForm.name" required maxlength="80" :readonly="Boolean(srsForm.preset_id)"></label>
-            <label>数据类型<select v-model="srsForm.kind" :disabled="Boolean(srsForm.preset_id)"><option value="domain">域名集合</option><option value="ip">IP/CIDR 集合</option></select></label>
-            <label>目标网卡<select v-model="srsForm.action"><option value="a">{{ selectedAdapterA?.friendly_name ?? '网卡 A' }}</option><option value="b">{{ selectedAdapterB?.friendly_name ?? '网卡 B' }}</option><option value="final">模式最终出口</option><option value="reject">拒绝</option></select></label>
-            <label class="remote-url">固定 HTTPS 地址<input v-model.trim="srsForm.url" required type="url" :readonly="Boolean(srsForm.preset_id)" placeholder="https://example.com/rules.srs"></label>
-            <label class="remote-hash">预期 SHA-256 <small>{{ srsForm.preset_id ? '内置预设手工更新时可留空，应用会记录实际哈希' : '自定义来源必须填写' }}</small><input v-model.trim="srsForm.expected_sha256" :required="!srsForm.preset_id" minlength="64" maxlength="64"></label>
-            <label class="toggle-label"><input v-model="srsForm.enabled" type="checkbox">启用此数据集</label>
-            <div class="rule-form-actions"><button class="secondary" type="button" @click="resetSRSForm">取消</button><button class="primary" type="submit" :disabled="Boolean(srsBusyID)">保存来源</button></div>
-          </form>
-          <div class="srs-source-list"><article v-for="source in srsSources" :key="source.id"><div><strong>{{ source.name }}</strong><span>{{ source.kind === 'domain' ? '域名 SRS' : 'IP SRS' }} · {{ source.preset_id ? '内置预设' : '自定义' }}</span><code>{{ source.url }}</code><small>{{ source.upstream || '用户指定来源' }} · {{ source.license || '许可证由用户确认' }}</small></div><div><span>{{ source.applied_sha256 ? `${source.size} 字节` : '尚未下载' }}</span><small>{{ formatRuleSetTime(source.updated_at) }}</small><code v-if="source.applied_sha256">{{ source.applied_sha256 }}</code><small v-if="source.last_error" class="field-error">{{ source.last_error }}</small></div><div class="proxy-actions"><button class="secondary" type="button" @click="editSRSSource(source)">设置</button><button class="primary" type="button" :disabled="srsBusyID === source.id" @click="refreshSRSSource(source)">{{ srsBusyID === source.id ? '校验中' : '立即更新' }}</button><button v-if="!source.preset_id" class="delete-button" type="button" @click="deleteSRSSource(source)">删除</button></div></article></div>
-        </section>
-        <details class="legacy-rules"><summary>兼容旧版 JSON 远程规则</summary><section class="remote-rules">
-          <div class="rules-heading"><div><p class="section-kicker">哈希固定</p><h2>远程规则集</h2><p>仅接受固定 HTTPS 地址和预期 SHA-256，禁止重定向；失败时继续使用最后一个已验证版本。</p></div><button class="secondary" type="button" :disabled="remoteRuleBusy || !remoteRuleSet?.name" @click="refreshRemoteRules">{{ remoteRuleBusy ? '正在更新' : '立即更新' }}</button></div>
+        <details class="legacy-rules"><summary>旧版 JSON 远程规则{{ legacyRemoteMigrated ? ' · 已迁移' : '' }}</summary><section class="remote-rules">
+          <div class="rules-heading"><div><p class="section-kicker">兼容迁移</p><h2>旧版远程规则集</h2><p>{{ legacyRemoteMigrated ? '规则已经复制到统一列表；旧来源仅保留用于审计，不再参与运行。' : '先验证最后一个远程版本，再将其中规则一次性迁移到统一列表。迁移完成后旧来源不再参与运行。' }}</p></div><div class="proxy-actions" v-if="!legacyRemoteMigrated"><button class="secondary" type="button" :disabled="remoteRuleBusy || !remoteRuleSet?.name" @click="refreshRemoteRules">{{ remoteRuleBusy ? '处理中' : '更新来源' }}</button><button class="primary" type="button" :disabled="remoteRuleBusy || !remoteRuleSet?.applied_sha256" @click="migrateRemoteRules">迁移到统一列表</button></div></div>
           <div v-if="remoteRuleSet?.name" class="rule-source-status">
             <div><span>当前下载来源</span><strong>{{ remoteRuleSet.name }}</strong><code>{{ remoteRuleSet.url }}</code></div>
             <div><span>预期 SHA-256</span><code>{{ remoteRuleSet.expected_sha256 }}</code></div>
             <div><span>最近成功更新</span><strong>{{ formatRuleSetTime(remoteRuleSet.updated_at) }}</strong></div>
           </div>
           <p v-else class="rule-source-empty">尚未配置远程规则来源。保存来源后可使用“立即更新”下载并校验规则。</p>
-          <form class="rule-form" @submit.prevent="configureRemoteRules">
+          <form v-if="!legacyRemoteMigrated" class="rule-form" @submit.prevent="configureRemoteRules">
             <label>名称<input v-model.trim="remoteRuleForm.name" required maxlength="80"></label>
             <label class="remote-url">固定 HTTPS 地址<input v-model.trim="remoteRuleForm.url" required type="url" placeholder="https://example.com/rules.json"></label>
             <label class="remote-hash">预期 SHA-256<input v-model.trim="remoteRuleForm.expected_sha256" required minlength="64" maxlength="64"></label>
@@ -1019,26 +1234,6 @@ onBeforeUnmount(() => {
       </template>
 
       <template v-else>
-        <section class="settings-list" aria-label="双出口 DNS 设置">
-          <div class="setting-row dns-setting">
-            <div><h2>双出口 DNS</h2><p>查询分别绑定实际网卡；DoH 固定使用 /dns-query，所有上游必须填写固定 IP 以避免解析环路。DNS 测试仅在核心停止时可用。</p></div>
-            <div class="dns-controls">
-              <div v-for="scope in (['domestic', 'global'] as const)" :key="scope" class="dns-row">
-                <label class="dns-preset">{{ scope === 'domestic' ? `国内线路 · ${selectedAdapterA?.friendly_name ?? '网卡 A'}` : `全球线路 · ${selectedAdapterB?.friendly_name ?? '网卡 B'}` }}
-                  <select v-model="dnsSettings[scope].preset_id" :disabled="dnsBusy" @change="dnsSettings[scope].preset_id ? chooseDNSPreset(scope) : setCustomDNS(scope)">
-                    <option value="">自定义</option><option v-for="preset in dnsPresets.filter(item => item.scope === scope)" :key="preset.id" :value="preset.id">{{ preset.name }}</option>
-                  </select>
-                </label>
-                <label>协议<select v-model="dnsSettings[scope].type" :disabled="dnsBusy || Boolean(dnsSettings[scope].preset_id)" @change="setCustomDNS(scope)"><option value="udp">UDP</option><option value="tls">DoT</option><option value="https">DoH</option></select></label>
-                <label>服务器 IP<input v-model.trim="dnsSettings[scope].server" required :readonly="Boolean(dnsSettings[scope].preset_id)" placeholder="1.1.1.1" @input="setCustomDNS(scope)"></label>
-                <label>端口<input v-model.number="dnsSettings[scope].port" type="number" min="1" max="65535" required :readonly="Boolean(dnsSettings[scope].preset_id)" @input="setCustomDNS(scope)"></label>
-                <label :class="{ 'dns-field-placeholder': dnsSettings[scope].type === 'udp' }">TLS 域名<input v-model.trim="dnsSettings[scope].server_name" :required="dnsSettings[scope].type !== 'udp'" :disabled="dnsSettings[scope].type === 'udp'" :readonly="Boolean(dnsSettings[scope].preset_id)" :placeholder="dnsSettings[scope].type === 'udp' ? 'UDP 不需要' : 'dns.example.com'" @input="setCustomDNS(scope)"></label>
-                <button type="button" class="dns-test" :class="dnsTests[scope]" :disabled="dnsTests[scope] === 'testing' || dnsBusy || isRunning" :title="isRunning ? '核心运行时 DNS 请求由 hijack-dns 接管，请停止核心后测试' : ''" @click="testDNSServer(scope)">{{ dnsTests[scope] === 'testing' ? '测试中' : dnsTests[scope] === 'success' ? '成功' : dnsTests[scope] === 'failed' ? '失败' : '测试' }}</button>
-              </div>
-              <div class="dns-actions"><button type="button" class="primary" :disabled="dnsBusy || isRunning" @click="saveDNSSettings">{{ dnsBusy ? '正在校验' : '保存 DNS' }}</button></div>
-            </div>
-          </div>
-        </section>
         <section class="settings-list" aria-label="IPv6 分流设置"><div class="setting-row"><div><h2>IPv6 分流</h2><p>关闭时拒绝 AAAA 查询和 IPv6 流量；开启前必须通过两个出口的 IPv6 地址、默认路由与前缀重叠预检。</p></div><div class="budget-controls"><label class="toggle"><input v-model="ipv6Policy" type="checkbox" true-value="split" false-value="block" :disabled="ipv6Busy || isRunning"><span>{{ ipv6Policy === 'split' ? '已启用' : '已关闭' }}</span></label><button type="button" class="primary" :disabled="ipv6Busy || isRunning" @click="saveIPv6Policy">{{ ipv6Busy ? '正在预检' : '保存 IPv6 策略' }}</button></div></div></section>
         <section class="settings-list" :aria-label="t('settings.language')">
           <div class="setting-row">
@@ -1063,6 +1258,13 @@ onBeforeUnmount(() => {
             <div><h2>{{ t('settings.autostart') }}</h2><p>{{ t('settings.autostartDetail') }}</p></div>
             <label class="toggle"><input v-model="autostartEnabled" type="checkbox" :disabled="autostartBusy" @change="updateAutostart"><span>{{ t(autostartEnabled ? 'common.enabled' : 'common.disabled') }}</span></label>
           </div>
+        </section>
+        <section class="settings-list network-reset-section" aria-label="应用故障恢复">
+          <div class="setting-row network-reset-setting">
+            <div><p class="section-kicker">故障恢复</p><h2>应用配置恢复</h2><p>仅重置网卡选择，或在自动备份后恢复规则、DNS、IPv6 策略和网卡选择默认值。不会删除代理节点、订阅、规则集来源，也不会修改 Windows 网络组件。</p><div class="config-directory"><span>当前用户配置目录</span><code>{{ applicationConfigDirectory || '无法确定配置目录' }}</code><small>卸载程序不会自动删除此目录；需要完整移除 WinRouter 时可手动删除。</small></div></div>
+            <div class="proxy-actions"><button type="button" class="secondary" :disabled="applicationResetBusy" @click="resetSavedInterfaces">重置网卡选择</button><button type="button" class="secondary" :disabled="applicationResetBusy" @click="resetApplicationSettings">恢复应用默认设置</button><button type="button" class="danger-button" :disabled="applicationResetBusy" @click="repairApplicationSettings">{{ applicationResetBusy ? '正在处理' : '强制修复配置' }}</button></div>
+          </div>
+          <div class="setting-row"><div><h2>配置文件位置</h2><p>规则、网卡选择、DNS、代理节点、订阅、缓存和恢复备份均保存在当前用户目录，不位于程序安装目录。</p></div><button type="button" class="secondary" :disabled="!applicationConfigDirectory" @click="copyApplicationConfigDirectory">复制路径</button></div>
         </section>
         <section class="settings-list network-reset-section" aria-label="高级网络修复">
           <div class="setting-row network-reset-setting">

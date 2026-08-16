@@ -79,7 +79,7 @@ func TestBuildDirectSplitRejectsConflictingCustomRules(t *testing.T) {
 	}
 }
 
-func TestBuildDirectSplitPrioritizesProcessRulesAndValidatesIdentity(t *testing.T) {
+func TestBuildDirectSplitPreservesUserRuleOrderAndValidatesIdentity(t *testing.T) {
 	rules, err := BuildDirectSplit(Request{DNSUpstreamA: "223.5.5.5", DNSUpstreamB: "1.1.1.1", CustomRules: []CustomRule{
 		{Type: "domain", Value: "example.com", Action: "reject"},
 		{Type: "process-name", Value: "Browser.EXE", Action: "route", Outbound: "b"},
@@ -94,7 +94,7 @@ func TestBuildDirectSplitPrioritizesProcessRulesAndValidatesIdentity(t *testing.
 			users = append(users, rule)
 		}
 	}
-	if len(users) != 3 || users[0].ProcessName[0] != "browser.exe" || users[1].ProcessPath[0] != `C:\Tools\browser.exe` || users[2].Domains[0] != "example.com" {
+	if len(users) != 3 || users[0].Domains[0] != "example.com" || users[1].ProcessName[0] != "browser.exe" || users[2].ProcessPath[0] != `C:\Tools\browser.exe` {
 		t.Fatalf("user rule order = %#v", users)
 	}
 	for _, value := range []CustomRule{{Type: "process-name", Value: `C:\bad.exe`, Action: "reject"}, {Type: "process-path", Value: "relative.exe", Action: "reject"}} {

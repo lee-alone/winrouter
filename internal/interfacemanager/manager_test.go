@@ -35,6 +35,27 @@ func TestManagerSelectPersistsAndResolvesByGUID(t *testing.T) {
 	}
 }
 
+func TestManagerClearSelectionPersists(t *testing.T) {
+	first := adapter("{A}", "00:00:00:00:00:01", "Ethernet A", "192.168.10.2", 24)
+	second := adapter("{B}", "00:00:00:00:00:02", "Ethernet B", "192.168.20.2", 24)
+	path := filepath.Join(t.TempDir(), "interfaces.json")
+	manager := newTestManager(t, path, func() []interfaces.Adapter { return []interfaces.Adapter{first, second} }, nil)
+	if _, err := manager.Select(first, second); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := manager.ClearSelection()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.InterfaceA.Status != "unselected" || snapshot.InterfaceB.Status != "unselected" {
+		t.Fatalf("selection was not cleared: %#v / %#v", snapshot.InterfaceA, snapshot.InterfaceB)
+	}
+	state, err := LoadState(path)
+	if err != nil || state.InterfaceA.GUID != "" || state.InterfaceB.GUID != "" {
+		t.Fatalf("cleared state was not persisted: %#v, %v", state, err)
+	}
+}
+
 func TestManagerRequiresSelectionWhenInterfaceDisappears(t *testing.T) {
 	first := adapter("{A}", "00:00:00:00:00:01", "Ethernet A", "192.168.10.2", 24)
 	second := adapter("{B}", "00:00:00:00:00:02", "Ethernet B", "192.168.20.2", 24)

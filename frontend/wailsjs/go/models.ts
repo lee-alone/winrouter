@@ -180,6 +180,7 @@ export namespace config {
 	    }
 	}
 	export class MVPCustomRule {
+	    id?: string;
 	    name: string;
 	    type: string;
 	    value: string;
@@ -191,6 +192,7 @@ export namespace config {
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
 	        this.name = source["name"];
 	        this.type = source["type"];
 	        this.value = source["value"];
@@ -245,8 +247,10 @@ export namespace config {
 	    tun: MVPTUN;
 	    interface_a: MVPInterface;
 	    interface_b: MVPInterface;
+	    default_outbound?: string;
 	    direct_prefixes: MVPDirectPrefix[];
 	    custom_rules?: MVPCustomRule[];
+	    rule_order?: string[];
 	    rule_sets?: MVPRuleSet[];
 	    domestic: MVPDomestic;
 	    dns: MVPDNS;
@@ -266,8 +270,10 @@ export namespace config {
 	        this.tun = this.convertValues(source["tun"], MVPTUN);
 	        this.interface_a = this.convertValues(source["interface_a"], MVPInterface);
 	        this.interface_b = this.convertValues(source["interface_b"], MVPInterface);
+	        this.default_outbound = source["default_outbound"];
 	        this.direct_prefixes = this.convertValues(source["direct_prefixes"], MVPDirectPrefix);
 	        this.custom_rules = this.convertValues(source["custom_rules"], MVPCustomRule);
+	        this.rule_order = source["rule_order"];
 	        this.rule_sets = this.convertValues(source["rule_sets"], MVPRuleSet);
 	        this.domestic = this.convertValues(source["domestic"], MVPDomestic);
 	        this.dns = this.convertValues(source["dns"], MVPDNS);
@@ -1407,6 +1413,73 @@ export namespace rulesets {
 	        this.size = source["size"];
 	        this.updated_at = this.convertValues(source["updated_at"], null);
 	        this.last_error = source["last_error"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+
+}
+
+export namespace rulesettings {
+	
+	export class Rule {
+	    id: string;
+	    name: string;
+	    type: string;
+	    value: string;
+	    action: string;
+	    enabled: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new Rule(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.name = source["name"];
+	        this.type = source["type"];
+	        this.value = source["value"];
+	        this.action = source["action"];
+	        this.enabled = source["enabled"];
+	    }
+	}
+	export class Settings {
+	    schema_version: number;
+	    initialized: boolean;
+	    legacy_remote_migrated?: boolean;
+	    default_outbound: string;
+	    rules: Rule[];
+	    rule_order: string[];
+	
+	    static createFrom(source: any = {}) {
+	        return new Settings(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.schema_version = source["schema_version"];
+	        this.initialized = source["initialized"];
+	        this.legacy_remote_migrated = source["legacy_remote_migrated"];
+	        this.default_outbound = source["default_outbound"];
+	        this.rules = this.convertValues(source["rules"], Rule);
+	        this.rule_order = source["rule_order"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

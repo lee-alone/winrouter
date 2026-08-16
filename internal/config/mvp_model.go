@@ -14,8 +14,10 @@ type MVPConfig struct {
 	TUN                   MVPTUN            `json:"tun"`
 	InterfaceA            MVPInterface      `json:"interface_a"`
 	InterfaceB            MVPInterface      `json:"interface_b"`
+	DefaultOutbound       string            `json:"default_outbound,omitempty"`
 	DirectPrefixes        []MVPDirectPrefix `json:"direct_prefixes"`
 	CustomRules           []MVPCustomRule   `json:"custom_rules,omitempty"`
+	RuleOrder             []string          `json:"rule_order,omitempty"`
 	RuleSets              []MVPRuleSet      `json:"rule_sets,omitempty"`
 	Domestic              MVPDomestic       `json:"domestic"`
 	DNS                   MVPDNS            `json:"dns"`
@@ -33,6 +35,7 @@ type MVPRuleSet struct {
 }
 
 type MVPCustomRule struct {
+	ID     string `json:"id,omitempty"`
 	Name   string `json:"name"`
 	Type   string `json:"type"`
 	Value  string `json:"value"`

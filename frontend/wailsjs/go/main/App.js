@@ -46,6 +46,10 @@ export function ExportDiagnosticBundle() {
   return window['go']['main']['App']['ExportDiagnosticBundle']();
 }
 
+export function GetApplicationConfigDirectory() {
+  return window['go']['main']['App']['GetApplicationConfigDirectory']();
+}
+
 export function GetAutostartStatus() {
   return window['go']['main']['App']['GetAutostartStatus']();
 }
@@ -86,6 +90,10 @@ export function GetRemoteRuleSet() {
   return window['go']['main']['App']['GetRemoteRuleSet']();
 }
 
+export function GetRuleSettings() {
+  return window['go']['main']['App']['GetRuleSettings']();
+}
+
 export function GetSRSPresets() {
   return window['go']['main']['App']['GetSRSPresets']();
 }
@@ -114,6 +122,10 @@ export function ListSubscriptions() {
   return window['go']['main']['App']['ListSubscriptions']();
 }
 
+export function MigrateRemoteRuleSet() {
+  return window['go']['main']['App']['MigrateRemoteRuleSet']();
+}
+
 export function PreviewCoreRules(arg1) {
   return window['go']['main']['App']['PreviewCoreRules'](arg1);
 }
@@ -136,6 +148,18 @@ export function RefreshSRSSource(arg1) {
 
 export function RefreshSubscription(arg1) {
   return window['go']['main']['App']['RefreshSubscription'](arg1);
+}
+
+export function RepairApplicationSettings() {
+  return window['go']['main']['App']['RepairApplicationSettings']();
+}
+
+export function ResetApplicationSettings() {
+  return window['go']['main']['App']['ResetApplicationSettings']();
+}
+
+export function ResetInterfaceSelection() {
+  return window['go']['main']['App']['ResetInterfaceSelection']();
 }
 
 export function ResetTrafficBudget() {
@@ -176,6 +200,10 @@ export function SetIPv6Policy(arg1) {
 
 export function SetProxyNodeFavorite(arg1, arg2) {
   return window['go']['main']['App']['SetProxyNodeFavorite'](arg1, arg2);
+}
+
+export function SetRuleSettings(arg1) {
+  return window['go']['main']['App']['SetRuleSettings'](arg1);
 }
 
 export function SetTrafficBudget(arg1) {

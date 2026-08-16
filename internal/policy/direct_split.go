@@ -36,6 +36,7 @@ type Request struct {
 }
 
 type CustomRule struct {
+	ID       string
 	Type     string
 	Value    string
 	Action   string
@@ -43,6 +44,7 @@ type CustomRule struct {
 }
 
 type Rule struct {
+	ID          string
 	Category    Category
 	Protocol    string
 	CIDRs       []string
@@ -96,18 +98,7 @@ func BuildDirectSplit(request Request) ([]Rule, error) {
 		rules = append(rules, Rule{Category: CategoryInfrastructure, CIDRs: infrastructureB, Action: "route", Outbound: "foreign-direct"})
 	}
 	seenCustom := make(map[string]string)
-	orderedCustom := make([]CustomRule, 0, len(request.CustomRules))
-	for _, custom := range request.CustomRules {
-		if custom.Type == "process-name" || custom.Type == "process-path" {
-			orderedCustom = append(orderedCustom, custom)
-		}
-	}
-	for _, custom := range request.CustomRules {
-		if custom.Type != "process-name" && custom.Type != "process-path" {
-			orderedCustom = append(orderedCustom, custom)
-		}
-	}
-	for index, custom := range orderedCustom {
+	for index, custom := range request.CustomRules {
 		var rule Rule
 		switch custom.Type {
 		case "domain":
@@ -157,6 +148,7 @@ func BuildDirectSplit(request Request) ([]Rule, error) {
 		} else {
 			return nil, fmt.Errorf("custom rule %d has invalid action", index+1)
 		}
+		rule.ID = custom.ID
 		rules = append(rules, rule)
 	}
 	for _, prefix := range direct {

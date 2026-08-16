@@ -53,6 +53,18 @@ func TestGenerateMVPMapsPolicyOrderToFinalJSON(t *testing.T) {
 	}
 }
 
+func TestGenerateMVPUsesConfiguredFallbackOutbound(t *testing.T) {
+	input := fixtureInput(t)
+	input.DefaultOutbound = "a"
+	generated, err := GenerateMVP(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if generated.Model.Route.Final != "domestic-direct" {
+		t.Fatalf("route.final = %q", generated.Model.Route.Final)
+	}
+}
+
 func TestGenerateMVPIsDeterministic(t *testing.T) {
 	input := fixtureInput(t)
 	first, err := GenerateMVP(input)
@@ -159,7 +171,7 @@ func TestPreviewMVPRulesIncludesGeneratedOrderAndFinal(t *testing.T) {
 	}
 }
 
-func TestGenerateMVPMapsProcessRulesAheadOfDomainRules(t *testing.T) {
+func TestGenerateMVPPreservesUserRuleOrder(t *testing.T) {
 	input := fixtureInput(t)
 	input.CustomRules = []MVPCustomRule{
 		{Name: "site", Type: "domain", Value: "example.com", Action: "reject"},
@@ -176,8 +188,59 @@ func TestGenerateMVPMapsProcessRulesAheadOfDomainRules(t *testing.T) {
 			users = append(users, generated.Model.Route.Rules[index])
 		}
 	}
-	if len(users) != 3 || users[0].ProcessName[0] != "browser.exe" || users[1].ProcessPath[0] != `C:\Tools\browser.exe` || users[2].DomainSuffix[0] != "example.com" {
+	if len(users) != 3 || users[0].DomainSuffix[0] != "example.com" || users[1].ProcessName[0] != "browser.exe" || users[2].ProcessPath[0] != `C:\Tools\browser.exe` {
 		t.Fatalf("generated process order = %#v", users)
+	}
+}
+
+func TestGenerateMVPAllowsUnifiedInlineAndRuleSetOrder(t *testing.T) {
+	input := fixtureInput(t)
+	input.CustomRules = []MVPCustomRule{
+		{ID: "first", Name: "First", Type: "domain", Value: "first.example", Action: "a"},
+		{ID: "last", Name: "Last", Type: "domain", Value: "last.example", Action: "b"},
+	}
+	input.RuleSets = []MVPRuleSet{{Tag: "winrouter-geosite", Kind: "domain", Action: "reject", Path: `C:\rules\geosite.srs`}}
+	input.RuleOrder = []string{"first", "srs:geosite", "last"}
+	generated, err := GenerateMVP(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateMVPSemantics(generated); err != nil {
+		t.Fatalf("unified order rejected: %v; categories = %#v", err, generated.RuleCategories)
+	}
+	want := []string{"user", "rule-set", "user"}
+	got := make([]string, 0, 3)
+	for _, category := range generated.RuleCategories {
+		if category == "user" || category == "rule-set" {
+			got = append(got, category)
+		}
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("unified categories = %#v, want %#v", got, want)
+	}
+}
+
+func TestGenerateMVPPlacesRuleSetBeforeBuiltInPolicyWithoutInlineRules(t *testing.T) {
+	input := fixtureInput(t)
+	input.RuleSets = []MVPRuleSet{{Tag: "winrouter-geoip", Kind: "ip", Action: "a", Path: `C:\rules\geoip.srs`}}
+	generated, err := GenerateMVP(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateMVPSemantics(generated); err != nil {
+		t.Fatalf("rule-set-only order rejected: %v; categories = %#v", err, generated.RuleCategories)
+	}
+	ruleSetIndex, directIndex := -1, -1
+	for index, category := range generated.RuleCategories {
+		if category == "rule-set" {
+			ruleSetIndex = index
+		}
+		if directIndex < 0 && category == "direct-prefix" {
+			directIndex = index
+		}
+	}
+	if ruleSetIndex < 0 || directIndex < 0 || ruleSetIndex >= directIndex {
+		t.Fatalf("rule-set is outside override region: %#v", generated.RuleCategories)
 	}
 }
 

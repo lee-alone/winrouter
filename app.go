@@ -32,6 +32,7 @@ import (
 	"winrouter/internal/processrules"
 	"winrouter/internal/recovery"
 	"winrouter/internal/rulesets"
+	"winrouter/internal/rulesettings"
 	"winrouter/internal/srssets"
 	"winrouter/internal/subscriptions"
 	"winrouter/internal/trafficbudget"
@@ -48,6 +49,8 @@ type App struct {
 	subscriptions         *subscriptions.Manager
 	ruleSets              *rulesets.Manager
 	ruleSetError          error
+	ruleSettings          *rulesettings.Manager
+	ruleSettingsError     error
 	srsSets               *srssets.Manager
 	srsSetError           error
 	trafficBudget         *trafficbudget.Manager
@@ -190,6 +193,13 @@ func (a *App) Startup(ctx context.Context) {
 	} else {
 		a.syncRuleSetMetadata(ruleSetManager.Get())
 	}
+	ruleSettingsManager, ruleSettingsErr := rulesettings.New(filepath.Join(configDirectory, "WinRouter", "rule-settings.json"))
+	a.mu.Lock()
+	a.ruleSettings, a.ruleSettingsError = ruleSettingsManager, ruleSettingsErr
+	a.mu.Unlock()
+	if ruleSettingsErr != nil {
+		a.observations.Log(observability.LevelError, "rules", "Rule settings store failed to load", newCorrelationID(), map[string]any{"error": ruleSettingsErr.Error()})
+	}
 	srsPath, srsPathErr := locateBundledCore()
 	var srsManager *srssets.Manager
 	var srsErr error
@@ -278,6 +288,14 @@ func (a *App) Startup(ctx context.Context) {
 }
 func (a *App) GetStatus() ApplicationStatus {
 	return ApplicationStatus{Name: "WinRouter", Version: buildinfo.Version, Commit: buildinfo.Commit, Mode: "direct-split", CoreVersion: buildinfo.CoreVersion, Ready: false}
+}
+
+func (a *App) GetApplicationConfigDirectory() string {
+	configRoot, err := os.UserConfigDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(configRoot, "WinRouter")
 }
 
 func (a *App) GetAutostartStatus() (autostart.Status, error) { return autostart.Get() }
@@ -436,6 +454,10 @@ func (a *App) ValidateSelectedProxyConfiguration(input config.MVPConfig) error {
 
 func (a *App) PreviewCoreRules(input config.MVPConfig) ([]config.RulePreview, error) {
 	var err error
+	input, err = a.withRuleSettings(input)
+	if err != nil {
+		return nil, err
+	}
 	input, err = a.withDNSSettings(input)
 	if err != nil {
 		return nil, err
@@ -714,6 +736,10 @@ func findAdapter(adapters []interfaces.Adapter, guid string) (interfaces.Adapter
 func (a *App) ValidateCoreConfiguration(input config.MVPConfig) error {
 	a.applyConnectionObservation(&input)
 	var err error
+	input, err = a.withRuleSettings(input)
+	if err != nil {
+		return err
+	}
 	input, err = a.withDNSSettings(input)
 	if err != nil {
 		return err
@@ -759,6 +785,10 @@ func (a *App) ValidateCoreConfiguration(input config.MVPConfig) error {
 func (a *App) ApplyCoreConfiguration(input config.MVPConfig) (core.Status, error) {
 	a.applyConnectionObservation(&input)
 	var err error
+	input, err = a.withRuleSettings(input)
+	if err != nil {
+		return core.Status{}, err
+	}
 	input, err = a.withDNSSettings(input)
 	if err != nil {
 		return core.Status{}, err
@@ -842,6 +872,101 @@ func (a *App) GetRemoteRuleSet() (rulesets.Source, error) {
 		return rulesets.Source{}, err
 	}
 	return manager.Get(), nil
+}
+
+func (a *App) GetRuleSettings() (rulesettings.Settings, error) {
+	a.mu.RLock()
+	manager, loadErr := a.ruleSettings, a.ruleSettingsError
+	a.mu.RUnlock()
+	if loadErr != nil {
+		return rulesettings.Settings{}, loadErr
+	}
+	if manager == nil {
+		return rulesettings.Settings{}, errors.New("rule settings manager is not ready")
+	}
+	return manager.Get(), nil
+}
+
+func (a *App) SetRuleSettings(settings rulesettings.Settings) (rulesettings.Settings, error) {
+	a.mu.RLock()
+	manager, loadErr := a.ruleSettings, a.ruleSettingsError
+	a.mu.RUnlock()
+	if loadErr != nil {
+		return rulesettings.Settings{}, loadErr
+	}
+	if manager == nil {
+		return rulesettings.Settings{}, errors.New("rule settings manager is not ready")
+	}
+	return manager.Configure(settings)
+}
+
+func (a *App) MigrateRemoteRuleSet() (rulesettings.Settings, error) {
+	ruleSetManager, err := a.getRuleSetManager()
+	if err != nil {
+		return rulesettings.Settings{}, err
+	}
+	remote, err := ruleSetManager.Rules()
+	if err != nil {
+		return rulesettings.Settings{}, fmt.Errorf("load verified remote rules for migration: %w", err)
+	}
+	if len(remote) == 0 {
+		return rulesettings.Settings{}, errors.New("no verified remote rules are available to migrate")
+	}
+	source := ruleSetManager.Get()
+	prefix := source.AppliedSHA256
+	if len(prefix) > 12 {
+		prefix = prefix[:12]
+	}
+	imported := make([]rulesettings.Rule, 0, len(remote))
+	for index, rule := range remote {
+		imported = append(imported, rulesettings.Rule{
+			ID:      fmt.Sprintf("legacy-remote-%s-%03d", prefix, index+1),
+			Name:    fmt.Sprintf("Imported remote rule %d", index+1),
+			Type:    rule.Type,
+			Value:   rule.Value,
+			Action:  rule.Action,
+			Enabled: true,
+		})
+	}
+	a.mu.RLock()
+	settingsManager, loadErr := a.ruleSettings, a.ruleSettingsError
+	a.mu.RUnlock()
+	if loadErr != nil {
+		return rulesettings.Settings{}, loadErr
+	}
+	if settingsManager == nil {
+		return rulesettings.Settings{}, errors.New("rule settings manager is not ready")
+	}
+	settings, err := settingsManager.MigrateLegacyRemote(imported)
+	if err != nil {
+		return rulesettings.Settings{}, err
+	}
+	a.observations.Log(observability.LevelInfo, "rules", "Legacy remote rules migrated to unified settings", newCorrelationID(), map[string]any{"rule_count": len(imported), "source_version": source.Version})
+	return settings, nil
+}
+
+func (a *App) withRuleSettings(input config.MVPConfig) (config.MVPConfig, error) {
+	settings, err := a.GetRuleSettings()
+	if err != nil {
+		return input, err
+	}
+	return applyRuleSettings(input, settings), nil
+}
+
+func applyRuleSettings(input config.MVPConfig, settings rulesettings.Settings) config.MVPConfig {
+	if !settings.Initialized {
+		return input
+	}
+	input.DefaultOutbound = settings.DefaultOutbound
+	input.RuleOrder = append([]string(nil), settings.RuleOrder...)
+	input.CustomRules = make([]config.MVPCustomRule, 0, len(settings.Rules))
+	for _, rule := range settings.Rules {
+		if !rule.Enabled {
+			continue
+		}
+		input.CustomRules = append(input.CustomRules, config.MVPCustomRule{ID: rule.ID, Name: rule.Name, Type: rule.Type, Value: rule.Value, Action: rule.Action})
+	}
+	return input
 }
 
 func (a *App) GetSRSPresets() []srssets.Preset { return srssets.Presets() }
@@ -933,6 +1058,13 @@ func (a *App) getRuleSetManager() (*rulesets.Manager, error) {
 }
 
 func (a *App) withRemoteRules(input config.MVPConfig) (config.MVPConfig, error) {
+	settings, err := a.GetRuleSettings()
+	if err != nil {
+		return input, err
+	}
+	if settings.LegacyRemoteMigrated {
+		return input, nil
+	}
 	manager, err := a.getRuleSetManager()
 	if err != nil {
 		return input, err
@@ -1062,6 +1194,133 @@ func (a *App) ResetWindowsNetworkStack() (NetworkResetResult, error) {
 		converted.Steps[index] = NetworkResetStep{Command: step.Command, Success: step.Success, ExitCode: step.ExitCode, Output: step.Output}
 	}
 	return converted, nil
+}
+
+func (a *App) ResetInterfaceSelection() (interfacemanager.Snapshot, error) {
+	if _, err := a.StopCore(); err != nil {
+		return interfacemanager.Snapshot{}, fmt.Errorf("stop routing core: %w", err)
+	}
+	manager, err := a.getInterfaceManager()
+	if err != nil {
+		return interfacemanager.Snapshot{}, err
+	}
+	snapshot, err := manager.ClearSelection()
+	if err == nil {
+		a.observations.Log(observability.LevelInfo, "application-reset", "Saved interface selection reset", "", nil)
+	}
+	return snapshot, err
+}
+
+func (a *App) ResetApplicationSettings() (string, error) {
+	if _, err := a.StopCore(); err != nil {
+		return "", fmt.Errorf("stop routing core: %w", err)
+	}
+	configRoot, err := os.UserConfigDir()
+	if err != nil {
+		return "", fmt.Errorf("locate user configuration: %w", err)
+	}
+	configDir := filepath.Join(configRoot, "WinRouter")
+	backupDir, err := backupApplicationSettings(configDir, []string{"interfaces.json", "rule-settings.json", "dns-settings.json"})
+	if err != nil {
+		return "", err
+	}
+	a.mu.RLock()
+	interfaceManager, interfaceErr := a.interfaceManager, a.interfaceError
+	ruleManager, ruleErr := a.ruleSettings, a.ruleSettingsError
+	dnsManager, dnsErr := a.dnsSettings, a.dnsSettingsError
+	a.mu.RUnlock()
+	if interfaceErr != nil || interfaceManager == nil || ruleErr != nil || ruleManager == nil || dnsErr != nil || dnsManager == nil {
+		return "", errors.New("application settings managers are not ready; backup was created but no settings were changed")
+	}
+	if _, err := interfaceManager.ClearSelection(); err != nil {
+		return "", fmt.Errorf("reset interface selection: %w", err)
+	}
+	if _, err := interfaceManager.SetIPv6Policy(interfacemanager.IPv6PolicyBlock); err != nil {
+		return "", fmt.Errorf("reset IPv6 policy: %w", err)
+	}
+	if _, err := ruleManager.Configure(rulesettings.Defaults()); err != nil {
+		return "", fmt.Errorf("reset rule settings: %w", err)
+	}
+	if _, err := dnsManager.Configure(dnssettings.Defaults()); err != nil {
+		return "", fmt.Errorf("reset DNS settings: %w", err)
+	}
+	a.mu.Lock()
+	a.lastConfig = nil
+	a.mu.Unlock()
+	a.observations.Log(observability.LevelWarning, "application-reset", "Application settings restored to defaults", "", map[string]any{"backup": backupDir})
+	return backupDir, nil
+}
+
+// RepairApplicationSettings rebuilds configuration files without depending on
+// managers that may have failed to load. The application must be restarted so
+// all background coordinators bind to the newly created managers.
+func (a *App) RepairApplicationSettings() (string, error) {
+	if _, err := a.StopCore(); err != nil {
+		return "", fmt.Errorf("stop routing core: %w", err)
+	}
+	configRoot, err := os.UserConfigDir()
+	if err != nil {
+		return "", fmt.Errorf("locate user configuration: %w", err)
+	}
+	configDir := filepath.Join(configRoot, "WinRouter")
+	backupDir, err := backupApplicationSettings(configDir, []string{"interfaces.json", "rule-settings.json", "dns-settings.json"})
+	if err != nil {
+		return "", err
+	}
+	if err := rebuildApplicationSettings(configDir); err != nil {
+		return "", fmt.Errorf("rebuild application settings (backup: %s): %w", backupDir, err)
+	}
+	a.observations.Log(observability.LevelWarning, "application-reset", "Application settings repaired; restart required", "", map[string]any{"backup": backupDir})
+	return backupDir, nil
+}
+
+func rebuildApplicationSettings(configDir string) error {
+	paths := []string{
+		filepath.Join(configDir, "interfaces.json"),
+		filepath.Join(configDir, "rule-settings.json"),
+		filepath.Join(configDir, "dns-settings.json"),
+	}
+	for _, path := range paths {
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("remove invalid %s: %w", filepath.Base(path), err)
+		}
+	}
+	if err := interfacemanager.SaveState(paths[0], interfacemanager.State{SchemaVersion: interfacemanager.StateSchemaVersion, IPv6Policy: interfacemanager.IPv6PolicyBlock}); err != nil {
+		return err
+	}
+	ruleManager, err := rulesettings.New(paths[1])
+	if err != nil {
+		return err
+	}
+	if _, err := ruleManager.Configure(rulesettings.Defaults()); err != nil {
+		return err
+	}
+	dnsManager, err := dnssettings.New(paths[2])
+	if err != nil {
+		return err
+	}
+	_, err = dnsManager.Configure(dnssettings.Defaults())
+	return err
+}
+
+func backupApplicationSettings(configDir string, names []string) (string, error) {
+	backupDir := filepath.Join(configDir, "backups", time.Now().Format("20060102-150405.000"))
+	if err := os.MkdirAll(backupDir, 0o700); err != nil {
+		return "", fmt.Errorf("create settings backup: %w", err)
+	}
+	for _, name := range names {
+		data, err := os.ReadFile(filepath.Join(configDir, name))
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return "", fmt.Errorf("back up %s: %w", name, err)
+		}
+		if err := os.WriteFile(filepath.Join(backupDir, name), data, 0o600); err != nil {
+			return "", fmt.Errorf("write backup %s: %w", name, err)
+		}
+	}
+	return backupDir, nil
 }
 
 func trayStatusLabel(status recovery.Status) string {

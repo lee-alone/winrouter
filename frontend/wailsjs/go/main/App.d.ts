@@ -12,6 +12,7 @@ import {dnssettings} from '../models';
 import {interfacemanager} from '../models';
 import {main} from '../models';
 import {recovery} from '../models';
+import {rulesettings} from '../models';
 import {trafficbudget} from '../models';
 import {processrules} from '../models';
 import {observability} from '../models';
@@ -38,6 +39,8 @@ export function DeleteSubscription(arg1:string):Promise<void>;
 
 export function ExportDiagnosticBundle():Promise<string>;
 
+export function GetApplicationConfigDirectory():Promise<string>;
+
 export function GetAutostartStatus():Promise<autostart.Status>;
 
 export function GetConnectionObservationEnabled():Promise<boolean>;
@@ -58,6 +61,8 @@ export function GetRecoveryStatus():Promise<recovery.Status>;
 
 export function GetRemoteRuleSet():Promise<rulesets.Source>;
 
+export function GetRuleSettings():Promise<rulesettings.Settings>;
+
 export function GetSRSPresets():Promise<Array<srssets.Preset>>;
 
 export function GetStatus():Promise<main.ApplicationStatus>;
@@ -72,6 +77,8 @@ export function ListSRSSources():Promise<Array<srssets.Source>>;
 
 export function ListSubscriptions():Promise<Array<subscriptions.Subscription>>;
 
+export function MigrateRemoteRuleSet():Promise<rulesettings.Settings>;
+
 export function PreviewCoreRules(arg1:config.MVPConfig):Promise<Array<config.RulePreview>>;
 
 export function PreviewDiagnosticBundle():Promise<observability.BundlePreview>;
@@ -83,6 +90,12 @@ export function RefreshRemoteRuleSet():Promise<rulesets.Source>;
 export function RefreshSRSSource(arg1:string):Promise<srssets.Source>;
 
 export function RefreshSubscription(arg1:string):Promise<subscriptions.Subscription>;
+
+export function RepairApplicationSettings():Promise<string>;
+
+export function ResetApplicationSettings():Promise<string>;
+
+export function ResetInterfaceSelection():Promise<interfacemanager.Snapshot>;
 
 export function ResetTrafficBudget():Promise<trafficbudget.Status>;
 
@@ -103,6 +116,8 @@ export function SetDNSSettings(arg1:dnssettings.Settings):Promise<dnssettings.Se
 export function SetIPv6Policy(arg1:string):Promise<interfacemanager.Snapshot>;
 
 export function SetProxyNodeFavorite(arg1:string,arg2:boolean):Promise<nodes.Node>;
+
+export function SetRuleSettings(arg1:rulesettings.Settings):Promise<rulesettings.Settings>;
 
 export function SetTrafficBudget(arg1:trafficbudget.Settings):Promise<trafficbudget.Status>;
 

@@ -61,7 +61,10 @@ func ValidateMVPSemantics(generated Generated) error {
 	if generated.Mode == ModeProxySplit {
 		expectedFinal = "proxy"
 	}
-	if model.Route.Final != expectedFinal {
+	if generated.Mode == ModeDirectSplit && model.Route.Final != "foreign-direct" && model.Route.Final != "domestic-direct" {
+		return semanticError("%s route.final must be a direct outbound", generated.Mode)
+	}
+	if generated.Mode != ModeDirectSplit && model.Route.Final != expectedFinal {
 		return semanticError("%s route.final must be %s", generated.Mode, expectedFinal)
 	}
 	tags := make(map[string]struct{}, len(model.Outbounds))
@@ -125,7 +128,8 @@ func ValidateMVPSemantics(generated Generated) error {
 	if len(generated.RuleCategories) != len(model.Route.Rules) {
 		return semanticError("policy and generated route rule counts differ")
 	}
-	ranks := map[string]int{"metadata": 0, "local": 1, "infrastructure": 2, "user": 3, "direct-prefix": 4, "reserved": 5, "domestic": 6, "rule-set": 7}
+	// Inline user rules and SRS-backed rules share one ordered override region.
+	ranks := map[string]int{"metadata": 0, "local": 1, "infrastructure": 2, "user": 3, "rule-set": 3, "direct-prefix": 4, "reserved": 5, "domestic": 6}
 	previous := -1
 	ipv6Rejected := false
 	for index, rule := range model.Route.Rules {

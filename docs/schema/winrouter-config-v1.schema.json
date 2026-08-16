@@ -19,6 +19,7 @@
     },
     "interface_a": { "$ref": "#/$defs/interface" },
     "interface_b": { "$ref": "#/$defs/interface" },
+    "default_outbound": { "enum": ["a", "b"] },
     "direct_prefixes": {
       "type": "array",
       "items": {
@@ -39,6 +40,7 @@
         "additionalProperties": false,
         "required": ["name", "type", "value", "action"],
         "properties": {
+          "id": { "type": "string" },
           "name": { "type": "string", "minLength": 1, "maxLength": 80 },
           "type": { "enum": ["domain", "ip", "process-name", "process-path"] },
           "value": { "type": "string", "minLength": 1 },
@@ -46,6 +48,7 @@
         }
       }
     },
+    "rule_order": { "type": "array", "items": { "type": "string" } },
     "rule_sets": {
       "type": "array",
       "items": {
