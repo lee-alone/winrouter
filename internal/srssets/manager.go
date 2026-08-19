@@ -34,6 +34,8 @@ type Preset struct {
 var presets = []Preset{
 	{ID: "sagernet-geosite-cn", Name: "中国域名 (geosite-cn)", Kind: "domain", URL: "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-cn.srs", Upstream: "SagerNet/sing-geosite", License: "GPL-3.0; data licenses follow upstream"},
 	{ID: "sagernet-geoip-cn", Name: "中国 IP (geoip-cn)", Kind: "ip", URL: "https://raw.githubusercontent.com/SagerNet/sing-geoip/rule-set/geoip-cn.srs", Upstream: "SagerNet/sing-geoip", License: "GPL-3.0; data licenses follow upstream"},
+	{ID: "sagernet-geosite-github", Name: "GitHub", Kind: "domain", URL: "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-github.srs", Upstream: "SagerNet/sing-geosite", License: "GPL-3.0; data licenses follow upstream"},
+	{ID: "sagernet-geosite-cloudflare", Name: "Cloudflare", Kind: "domain", URL: "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-cloudflare.srs", Upstream: "SagerNet/sing-geosite", License: "GPL-3.0; data licenses follow upstream"},
 }
 
 type Source struct {
@@ -113,6 +115,27 @@ func newManager(path string, validator Validator, client *http.Client) (*Manager
 	if m.state.SchemaVersion != 1 {
 		return nil, fmt.Errorf("unsupported SRS schema %d", m.state.SchemaVersion)
 	}
+	// Add newly shipped presets without changing existing user choices or
+	// cached data. This makes upgrades additive and preserves custom policy.
+	addedPreset := false
+	for _, preset := range defaultSources() {
+		found := false
+		for _, source := range m.state.Sources {
+			if source.ID == preset.ID {
+				found = true
+				break
+			}
+		}
+		if !found {
+			m.state.Sources = append(m.state.Sources, preset)
+			addedPreset = true
+		}
+	}
+	if addedPreset {
+		if err := m.save(m.state); err != nil {
+			return nil, fmt.Errorf("save SRS defaults: %w", err)
+		}
+	}
 	for _, source := range m.state.Sources {
 		if err := validateSource(source); err != nil {
 			return nil, fmt.Errorf("saved SRS source %q: %w", source.Name, err)
@@ -124,7 +147,11 @@ func newManager(path string, validator Validator, client *http.Client) (*Manager
 func defaultSources() []Source {
 	result := make([]Source, 0, len(presets))
 	for _, preset := range presets {
-		result = append(result, Source{ID: preset.ID, Name: preset.Name, Kind: preset.Kind, PresetID: preset.ID, URL: preset.URL, Enabled: true, Action: "a", Upstream: preset.Upstream, License: preset.License})
+		action := "a"
+		if preset.ID == "sagernet-geosite-github" || preset.ID == "sagernet-geosite-cloudflare" {
+			action = "b"
+		}
+		result = append(result, Source{ID: preset.ID, Name: preset.Name, Kind: preset.Kind, PresetID: preset.ID, URL: preset.URL, Enabled: true, Action: action, Upstream: preset.Upstream, License: preset.License})
 	}
 	return result
 }
@@ -313,9 +340,6 @@ func validateSource(source Source) error {
 		if err != nil || len(decoded) != sha256.Size {
 			return errors.New("expected SHA-256 must be 64 hexadecimal characters")
 		}
-	}
-	if source.PresetID == "" && source.ExpectedSHA256 == "" {
-		return errors.New("custom SRS sources require a fixed SHA-256")
 	}
 	return nil
 }

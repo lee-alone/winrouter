@@ -201,6 +201,13 @@ function messageOf(reason: unknown): string {
   return reason instanceof Error ? reason.message : String(reason)
 }
 
+function formatSRSUpdatedAt(source: srssets.Source): string {
+  if (!source.updated_at) return '尚未成功更新'
+  const date = new Date(source.updated_at)
+  if (Number.isNaN(date.getTime())) return '更新时间未知'
+  return `最近更新：${date.toLocaleString('zh-CN', { hour12: false })}`
+}
+
 function resetSRSForm() {
   srsForm.value = { id: '', name: '', kind: 'domain', preset_id: '', url: '', expected_sha256: '', enabled: true, action: 'a' }
 }
@@ -1042,7 +1049,7 @@ onBeforeUnmount(() => {
           <template v-if="ruleForm.type === 'rule-set'">
             <label>数据类型<select v-model="srsForm.kind" :disabled="Boolean(srsForm.preset_id)"><option value="domain">域名集合 / geosite</option><option value="ip">IP 集合 / geoip</option></select></label>
             <label class="remote-url">固定 HTTPS 地址<input v-model.trim="srsForm.url" required type="url" :readonly="Boolean(srsForm.preset_id)" placeholder="https://example.com/rules.srs"></label>
-            <label class="remote-hash">预期 SHA-256 <small>{{ srsForm.preset_id ? '内置预设可留空' : '自定义来源必须填写' }}</small><input v-model.trim="srsForm.expected_sha256" :required="!srsForm.preset_id" minlength="64" maxlength="64"></label>
+            <label class="remote-hash">固定 SHA-256（可选） <small>{{ srsForm.preset_id ? '内置滚动源由应用记录实际 hash' : '留空则允许滚动更新；填写后锁定指定版本' }}</small><input v-model.trim="srsForm.expected_sha256" minlength="64" maxlength="64" placeholder="可留空"></label>
           </template>
           <div class="rule-form-actions"><button class="secondary" type="button" @click="resetRuleForm">取消</button><button class="primary" type="submit" :disabled="Boolean(srsBusyID)">{{ ruleForm.id ? '保存修改' : '添加规则' }}</button></div>
         </form>
@@ -1059,7 +1066,7 @@ onBeforeUnmount(() => {
             </template>
             <template v-else>
               <label class="master-rule-enabled"><input type="checkbox" :checked="row.source.enabled" :disabled="srsBusyID === row.source.id" @change="toggleSRSSource(row.source)"><span>{{ row.source.enabled ? '启用' : '停用' }}</span></label>
-              <div><strong>{{ row.source.name }}</strong><small>{{ row.source.kind === 'domain' ? 'geosite / 域名集合' : 'geoip / IP 集合' }} · {{ row.source.applied_sha256 ? '数据集已验证' : row.source.last_error ? '下载失败，暂无缓存' : '待下载' }}</small></div>
+              <div><strong>{{ row.source.name }}</strong><small>{{ row.source.kind === 'domain' ? 'geosite / 域名集合' : 'geoip / IP 集合' }} · {{ row.source.applied_sha256 ? '数据集已验证' : row.source.last_error ? '下载失败，暂无缓存' : '待下载' }}</small><small>{{ formatSRSUpdatedAt(row.source) }}<template v-if="row.source.last_error && row.source.applied_sha256"> · 上次更新失败，继续使用有效缓存</template></small></div>
               <span>{{ row.source.action === 'a' ? `网卡 A · ${selectedAdapterA?.friendly_name ?? ''}` : row.source.action === 'b' ? `网卡 B · ${selectedAdapterB?.friendly_name ?? ''}` : row.source.action === 'reject' ? '拒绝' : '兜底出口' }}</span>
               <div class="proxy-actions"><button class="secondary" type="button" @click="moveMasterRule(row.key, -1)" :disabled="index === 0">上移</button><button class="secondary" type="button" @click="moveMasterRule(row.key, 1)" :disabled="index === masterRows.length - 1">下移</button><button class="secondary" type="button" @click="editSRSSource(row.source)">编辑</button><button class="secondary" type="button" :disabled="srsBusyID === row.source.id" @click="refreshSRSSource(row.source)">{{ srsBusyID === row.source.id ? '校验中' : '更新' }}</button><button v-if="!row.source.preset_id" class="delete-button" type="button" @click="deleteSRSSource(row.source)">删除</button></div>
             </template>

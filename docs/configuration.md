@@ -32,8 +32,9 @@ Phase 4 起，配置可包含 `custom_rules`。每条规则由 `name`、`type`�
 必须是绝对 Windows 可执行文件路径。同名多路径在应用前失败关闭，子进程需使用自己的名称或路径显式配置。
 
 远程规则集使用受限 JSON 文档：顶层仅允许 `version` 与 `rules`，每条远程规则使用与 `custom_rules`
-相同的 `type`、`value` 和 `action`。来源必须是无 userinfo、query 和 fragment 的固定 HTTPS URL，并预先配置
-SHA-256。更新仅在下载大小、哈希和结构全部验证后提交；失败时最后有效缓存保持不变。诊断包不包含规则正文。
+相同的 `type`、`value` 和 `action`。来源必须是无 userinfo、query 和 fragment 的固定 HTTPS URL。
+应用会校验下载大小、SRS 格式、结构和自动计算的 SHA-256，再原子提交；成功版本的实际 SHA-256、大小和更新时间会显示并记录。
+`ExpectedSHA256` 为可选的固定版本锁定值：留空允许官方滚动源更新，填写后仅接受匹配内容。更新失败时最后有效缓存保持不变，诊断包不包含规则正文。
 
 1. sniff 元数据动作；
 2. 回环与本机地址使用不绑定物理接口的 `local-direct`；
