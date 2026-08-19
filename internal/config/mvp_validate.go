@@ -109,7 +109,11 @@ func ValidateMVPSemantics(generated Generated) error {
 			return semanticError("proxy endpoint must have an interface B loop-prevention rule")
 		}
 	}
-	if !model.DNS.IndependentCache || (model.DNS.Strategy != "ipv4_only" && model.DNS.Strategy != "prefer_ipv4") || model.DNS.Final != "dns-global" {
+	expectedDNSFinal := "dns-global"
+	if generated.Mode == ModeDirectSplit && generated.Model.Route.Final == "domestic-direct" {
+		expectedDNSFinal = "dns-domestic"
+	}
+	if !model.DNS.IndependentCache || (model.DNS.Strategy != "ipv4_only" && model.DNS.Strategy != "prefer_ipv4") || model.DNS.Final != expectedDNSFinal {
 		return semanticError("DNS cache isolation, strategy, or final server is invalid")
 	}
 	dnsTags := make(map[string]struct{}, len(model.DNS.Servers))

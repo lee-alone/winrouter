@@ -45,6 +45,7 @@ type DNSConfig struct {
 }
 
 type DNSRule struct {
+	Domain       []string `json:"domain,omitempty"`
 	DomainSuffix []string `json:"domain_suffix,omitempty"`
 	RuleSet      []string `json:"rule_set,omitempty"`
 	QueryType    []string `json:"query_type,omitempty"`

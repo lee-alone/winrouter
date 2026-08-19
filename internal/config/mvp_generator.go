@@ -251,14 +251,61 @@ func GenerateMVP(input MVPConfig) (Generated, error) {
 	if input.IPv6 == IPv6Block {
 		dnsRules = append(dnsRules, DNSRule{QueryType: []string{"AAAA"}, Action: "reject"})
 	}
+	// Keep DNS selection aligned with user domain routing rules. Otherwise a
+	// domain can be resolved through B and then connected through A (or vice
+	// versa), which is particularly harmful for CDN-backed services.
+	for _, rule := range input.CustomRules {
+		if rule.Type != "domain" && rule.Type != "domain-suffix" {
+			continue
+		}
+		var action, server string
+		switch rule.Action {
+		case "reject":
+			action = "reject"
+		case "a":
+			action, server = "route", "dns-domestic"
+		case "b":
+			action, server = "route", "dns-global"
+		case "final":
+			action, server = "route", finalDNSResolver(input.Mode, input.DefaultOutbound)
+		default:
+			continue
+		}
+		normalized := normalizedDomainCopy([]string{rule.Value})
+		if len(normalized) == 0 {
+			continue
+		}
+		dnsRule := DNSRule{Action: action, Server: server}
+		if rule.Type == "domain" {
+			dnsRule.Domain = normalized
+		} else {
+			dnsRule.DomainSuffix = normalized
+		}
+		dnsRules = append(dnsRules, dnsRule)
+	}
 	if domains := normalizedDomainCopy(input.Domestic.DomainSuffixes); len(domains) > 0 {
 		dnsRules = append(dnsRules, DNSRule{DomainSuffix: domains, Action: "route", Server: "dns-domestic"})
 	}
 	for _, ruleSet := range input.RuleSets {
-		if ruleSet.Kind == "domain" && ruleSet.Action == "a" {
-			dnsRules = append(dnsRules, DNSRule{RuleSet: []string{ruleSet.Tag}, Action: "route", Server: "dns-domestic"})
+		if ruleSet.Kind != "domain" {
+			continue
+		}
+		action, server := "", ""
+		switch ruleSet.Action {
+		case "a":
+			action, server = "route", "dns-domestic"
+		case "b":
+			action, server = "route", "dns-global"
+		case "final":
+			action, server = "route", finalDNSResolver(input.Mode, input.DefaultOutbound)
+		case "reject":
+			action = "reject"
+		}
+		if action != "" {
+			dnsRules = append(dnsRules, DNSRule{RuleSet: []string{ruleSet.Tag}, Action: action, Server: server})
 		}
 	}
+	finalDNS := finalDNSResolver(input.Mode, input.DefaultOutbound)
 	routeRuleSets := make([]RuleSet, 0, len(input.RuleSets))
 	for _, ruleSet := range input.RuleSets {
 		routeRuleSets = append(routeRuleSets, RuleSet{Type: "local", Tag: ruleSet.Tag, Format: "binary", Path: ruleSet.Path})
@@ -268,11 +315,11 @@ func GenerateMVP(input MVPConfig) (Generated, error) {
 		DNS: DNSConfig{
 			Servers: []DNSServer{dnsServer("dns-domestic", input.DNS.Domestic, "domestic-direct"), dnsServer("dns-global", input.DNS.Global, "foreign-direct")},
 			Rules:   dnsRules,
-			Final:   "dns-global", Strategy: dnsStrategy(input.IPv6), IndependentCache: true,
+			Final:   finalDNS, Strategy: dnsStrategy(input.IPv6), IndependentCache: true,
 		},
 		Inbounds:  []TUNInbound{{Type: "tun", Tag: "tun-in", InterfaceName: "WinRouter-TUN", Address: []string{netip.PrefixFrom(interfacePrefix.Addr().Next(), 30).String(), "fdfe:dcba:9876::1/126"}, AutoRoute: true, StrictRoute: true, Stack: input.TUN.Stack}},
 		Outbounds: outbounds,
-		Route:     RouteConfig{AutoDetectInterface: false, DefaultDNSResolver: "dns-global", RuleSets: routeRuleSets, Rules: make([]RouteRule, 0, len(rules)+len(input.RuleSets)), Final: finalOutbound},
+		Route:     RouteConfig{AutoDetectInterface: false, DefaultDNSResolver: finalDNS, RuleSets: routeRuleSets, Rules: make([]RouteRule, 0, len(rules)+len(input.RuleSets)), Final: finalOutbound},
 	}
 	if input.ConnectionObservation {
 		secret := strings.TrimSpace(input.ConnectionAPISecret)
@@ -440,4 +487,11 @@ func normalizedDomainCopy(values []string) []string {
 	}
 	sort.Strings(result)
 	return result
+}
+
+func finalDNSResolver(mode, defaultOutbound string) string {
+	if mode == ModeDirectSplit && defaultOutbound == "a" {
+		return "dns-domestic"
+	}
+	return "dns-global"
 }

@@ -10,7 +10,7 @@ import (
 func BuildCandidates(adapters []interfaces.Adapter) []Candidate {
 	result := make([]Candidate, 0)
 	for _, adapter := range adapters {
-		if !adapter.Candidate || (adapter.Kind != interfaces.KindEthernet && adapter.Kind != interfaces.KindWiFi) {
+		if !adapter.Candidate || adapter.Status == "not-present" || (adapter.Kind != interfaces.KindEthernet && adapter.Kind != interfaces.KindWiFi) {
 			continue
 		}
 		candidate := Candidate{Adapter: adapter, Reasons: make([]string, 0, 4)}

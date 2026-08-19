@@ -133,6 +133,16 @@ func TestBuildCandidatesRequiresIPv4GatewayButAcceptsDualStackGateway(t *testing
 	}
 }
 
+func TestBuildCandidatesExcludesNotPresentAdapters(t *testing.T) {
+	present := adapter("{A}", "", "Ethernet", "192.168.10.2", 24)
+	ghost := adapter("{GHOST}", "", "Ethernet 2", "192.168.20.2", 24)
+	ghost.Status = "not-present"
+	candidates := BuildCandidates([]interfaces.Adapter{present, ghost})
+	if len(candidates) != 1 || candidates[0].Adapter.GUID != present.GUID {
+		t.Fatalf("candidates = %#v", candidates)
+	}
+}
+
 func TestSelectedInterfacesRequireIndependentIPv4DefaultRoutes(t *testing.T) {
 	first := adapter("{A}", "", "Ethernet A", "192.168.10.2", 24)
 	first.Index = 10

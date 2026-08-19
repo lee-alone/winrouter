@@ -57,6 +57,7 @@ func mapAdapter(source *windows.IpAdapterAddresses) Adapter {
 	name := windows.UTF16PtrToString(source.FriendlyName)
 	description := windows.UTF16PtrToString(source.Description)
 	kind := classify(source.IfType, name, description)
+	status := statusName(source.OperStatus)
 	adapter := Adapter{
 		GUID:         normalizeGUID(windows.BytePtrToString(source.AdapterName)),
 		LUID:         source.Luid,
@@ -64,9 +65,9 @@ func mapAdapter(source *windows.IpAdapterAddresses) Adapter {
 		IPv6Index:    source.Ipv6IfIndex,
 		FriendlyName: name,
 		Description:  description,
-		Status:       statusName(source.OperStatus),
+		Status:       status,
 		Kind:         kind,
-		Candidate:    isCandidate(kind),
+		Candidate:    isCandidate(kind) && status != "not-present",
 		MTU:          source.Mtu,
 		IPv4Metric:   source.Ipv4Metric,
 		IPv6Metric:   source.Ipv6Metric,
