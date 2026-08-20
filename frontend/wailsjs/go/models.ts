@@ -75,13 +75,53 @@ export namespace clashapi {
 
 export namespace config {
 	
+	export class MVPProxyTransport {
+	    type: string;
+	    path?: string;
+	    host?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new MVPProxyTransport(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.type = source["type"];
+	        this.path = source["path"];
+	        this.host = source["host"];
+	    }
+	}
+	export class MVPProxyTLS {
+	    enabled: boolean;
+	    server_name?: string;
+	    insecure?: boolean;
+	    alpn?: string[];
+	
+	    static createFrom(source: any = {}) {
+	        return new MVPProxyTLS(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.enabled = source["enabled"];
+	        this.server_name = source["server_name"];
+	        this.insecure = source["insecure"];
+	        this.alpn = source["alpn"];
+	    }
+	}
 	export class MVPProxy {
 	    type: string;
 	    server: string;
 	    port: number;
+	    egress?: string;
 	    method?: string;
 	    username?: string;
 	    password?: string;
+	    uuid?: string;
+	    flow?: string;
+	    security?: string;
+	    tls?: MVPProxyTLS;
+	    transport?: MVPProxyTransport;
 	
 	    static createFrom(source: any = {}) {
 	        return new MVPProxy(source);
@@ -92,10 +132,34 @@ export namespace config {
 	        this.type = source["type"];
 	        this.server = source["server"];
 	        this.port = source["port"];
+	        this.egress = source["egress"];
 	        this.method = source["method"];
 	        this.username = source["username"];
 	        this.password = source["password"];
+	        this.uuid = source["uuid"];
+	        this.flow = source["flow"];
+	        this.security = source["security"];
+	        this.tls = this.convertValues(source["tls"], MVPProxyTLS);
+	        this.transport = this.convertValues(source["transport"], MVPProxyTransport);
 	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
 	}
 	export class MVPDNSServer {
 	    type: string;
@@ -301,6 +365,8 @@ export namespace config {
 		    return a;
 		}
 	}
+	
+	
 	
 	
 	
@@ -960,11 +1026,11 @@ export namespace nodes {
 	    uuid?: string;
 	    method?: string;
 	    flow?: string;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new AuthenticationInput(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.username = source["username"];
@@ -974,38 +1040,54 @@ export namespace nodes {
 	        this.flow = source["flow"];
 	    }
 	}
-	export class TLSInput {
-	    enabled?: boolean;
-	    server_name?: string;
-	    insecure?: boolean;
-	    alpn?: string[];
-
+	export class AuthenticationNode {
+	    username?: string;
+	    method?: string;
+	    flow?: string;
+	
 	    static createFrom(source: any = {}) {
-	        return new TLSInput(source);
+	        return new AuthenticationNode(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.enabled = source["enabled"];
-	        this.server_name = source["server_name"];
-	        this.insecure = source["insecure"];
-	        this.alpn = source["alpn"];
+	        this.username = source["username"];
+	        this.method = source["method"];
+	        this.flow = source["flow"];
 	    }
 	}
 	export class TransportInput {
 	    type?: string;
 	    path?: string;
 	    host?: string;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new TransportInput(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.type = source["type"];
 	        this.path = source["path"];
 	        this.host = source["host"];
+	    }
+	}
+	export class TLSInput {
+	    enabled?: boolean;
+	    server_name?: string;
+	    insecure?: boolean;
+	    alpn?: string[];
+	
+	    static createFrom(source: any = {}) {
+	        return new TLSInput(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.enabled = source["enabled"];
+	        this.server_name = source["server_name"];
+	        this.insecure = source["insecure"];
+	        this.alpn = source["alpn"];
 	    }
 	}
 	export class Input {
@@ -1035,29 +1117,47 @@ export namespace nodes {
 	        this.server = source["server"];
 	        this.port = source["port"];
 	        this.egress = source["egress"];
-	        this.authentication = source["authentication"] ? AuthenticationInput.createFrom(source["authentication"]) : undefined;
-	        this.tls = source["tls"] ? TLSInput.createFrom(source["tls"]) : undefined;
-	        this.transport = source["transport"] ? TransportInput.createFrom(source["transport"]) : undefined;
+	        this.authentication = this.convertValues(source["authentication"], AuthenticationInput);
+	        this.tls = this.convertValues(source["tls"], TLSInput);
+	        this.transport = this.convertValues(source["transport"], TransportInput);
 	        this.clear_secret = source["clear_secret"];
 	        this.username = source["username"];
 	        this.password = source["password"];
 	        this.clear_password = source["clear_password"];
 	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
 	}
-	export class AuthenticationNode {
-	    username?: string;
-	    method?: string;
-	    flow?: string;
-
+	export class TransportNode {
+	    type?: string;
+	    path?: string;
+	    host?: string;
+	
 	    static createFrom(source: any = {}) {
-	        return new AuthenticationNode(source);
+	        return new TransportNode(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.username = source["username"];
-	        this.method = source["method"];
-	        this.flow = source["flow"];
+	        this.type = source["type"];
+	        this.path = source["path"];
+	        this.host = source["host"];
 	    }
 	}
 	export class TLSNode {
@@ -1065,33 +1165,17 @@ export namespace nodes {
 	    server_name?: string;
 	    insecure?: boolean;
 	    alpn?: string[];
-
+	
 	    static createFrom(source: any = {}) {
 	        return new TLSNode(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.enabled = source["enabled"];
 	        this.server_name = source["server_name"];
 	        this.insecure = source["insecure"];
 	        this.alpn = source["alpn"];
-	    }
-	}
-	export class TransportNode {
-	    type?: string;
-	    path?: string;
-	    host?: string;
-
-	    static createFrom(source: any = {}) {
-	        return new TransportNode(source);
-	    }
-
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.type = source["type"];
-	        this.path = source["path"];
-	        this.host = source["host"];
 	    }
 	}
 	export class Node {
@@ -1125,9 +1209,9 @@ export namespace nodes {
 	        this.resolved_ip = source["resolved_ip"];
 	        this.port = source["port"];
 	        this.egress = source["egress"];
-	        this.authentication = source["authentication"] ? AuthenticationNode.createFrom(source["authentication"]) : undefined;
-	        this.tls = source["tls"] ? TLSNode.createFrom(source["tls"]) : undefined;
-	        this.transport = source["transport"] ? TransportNode.createFrom(source["transport"]) : undefined;
+	        this.authentication = this.convertValues(source["authentication"], AuthenticationNode);
+	        this.tls = this.convertValues(source["tls"], TLSNode);
+	        this.transport = this.convertValues(source["transport"], TransportNode);
 	        this.has_secret = source["has_secret"];
 	        this.has_password = source["has_password"];
 	        this.username = source["username"];
@@ -1135,7 +1219,27 @@ export namespace nodes {
 	        this.subscription_id = source["subscription_id"];
 	        this.favorite = source["favorite"];
 	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
 	}
+	
+	
 	export class TestResult {
 	    node_id: string;
 	    available: boolean;
@@ -1189,6 +1293,7 @@ export namespace nodes {
 		    return a;
 		}
 	}
+	
 
 }
 

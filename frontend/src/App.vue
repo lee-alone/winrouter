@@ -65,10 +65,39 @@ const networkResetResult = ref<main.NetworkResetResult>()
 const applicationResetBusy = ref(false)
 const initializationFailed = ref(false)
 const applicationConfigDirectory = ref('')
+interface ProxyProtocolMeta {
+  value: 'http' | 'shadowsocks' | 'vmess' | 'vless' | 'trojan'
+  label: string
+  authKind: 'user-pass' | 'ss' | 'uuid' | 'trojan'
+  supportsTLS: boolean
+  forceTLS: boolean
+  supportsTransport: boolean
+  supportsFlow: boolean
+  allowNoSecret: boolean
+}
+
+const proxyProtocols: ProxyProtocolMeta[] = [
+  { value: 'http', label: 'HTTP CONNECT', authKind: 'user-pass', supportsTLS: false, forceTLS: false, supportsTransport: false, supportsFlow: false, allowNoSecret: true },
+  { value: 'shadowsocks', label: 'Shadowsocks', authKind: 'ss', supportsTLS: false, forceTLS: false, supportsTransport: false, supportsFlow: false, allowNoSecret: false },
+  { value: 'vmess', label: 'VMess', authKind: 'uuid', supportsTLS: true, forceTLS: false, supportsTransport: true, supportsFlow: false, allowNoSecret: false },
+  { value: 'vless', label: 'VLESS', authKind: 'uuid', supportsTLS: true, forceTLS: false, supportsTransport: true, supportsFlow: true, allowNoSecret: false },
+  { value: 'trojan', label: 'Trojan', authKind: 'trojan', supportsTLS: true, forceTLS: true, supportsTransport: true, supportsFlow: false, allowNoSecret: false },
+]
+
+const ssMethods = [
+  'aes-128-gcm',
+  'aes-192-gcm',
+  'aes-256-gcm',
+  'chacha20-ietf-poly1305',
+  'xchacha20-ietf-poly1305',
+]
+
 const proxyNodes = ref<nodes.Node[]>([])
 const proxyFormOpen = ref(false)
 const proxyForm = ref({
   id: '',
+  original_type: 'http' as 'http' | 'shadowsocks' | 'vmess' | 'vless' | 'trojan',
+  original_has_secret: false,
   name: '',
   type: 'http' as 'http' | 'shadowsocks' | 'vmess' | 'vless' | 'trojan',
   server: '',
@@ -82,11 +111,18 @@ const proxyForm = ref({
   tls_enabled: false,
   tls_server_name: '',
   tls_insecure: false,
+  tls_alpn: '',
   transport_type: 'tcp' as 'tcp' | 'ws',
   transport_path: '',
   transport_host: '',
+  has_saved_secret: false,
+  replace_secret: false,
   clear_secret: false,
 })
+const proxyFieldErrors = ref<Record<string, string>>({})
+const proxyImportOpen = ref(false)
+const proxyImportURI = ref('')
+const proxyImportError = ref('')
 const selectedMode = ref<'direct-split' | 'proxy-split'>('direct-split')
 const defaultOutbound = ref<'a' | 'b'>('b')
 const proxyTests = ref<Record<string, nodes.TestResult>>({})
@@ -526,9 +562,48 @@ async function updateAutostart() {
 	} finally { autostartBusy.value = false }
 }
 
+function openNewProxyForm() {
+  resetProxyForm()
+  proxyFormOpen.value = true
+}
+
+function selectProtocol(type: 'http' | 'shadowsocks' | 'vmess' | 'vless' | 'trojan') {
+  if (proxyForm.value.type === type) return
+  proxyForm.value.type = type
+  if (type === 'trojan') {
+    proxyForm.value.tls_enabled = true
+  }
+
+  if (proxyForm.value.id) {
+    if (type === proxyForm.value.original_type) {
+      proxyForm.value.has_saved_secret = proxyForm.value.original_has_secret
+      proxyForm.value.replace_secret = !proxyForm.value.original_has_secret
+      proxyForm.value.clear_secret = false
+    } else {
+      // Switched away from original protocol: old DPAPI secret cannot be reused across different protocols
+      proxyForm.value.has_saved_secret = false
+      proxyForm.value.replace_secret = true
+      proxyForm.value.clear_secret = false
+      // Clear protocol-specific fields of previous protocol
+      if (type === 'vmess' || type === 'vless') {
+        proxyForm.value.password = ''
+      } else if (type === 'shadowsocks' || type === 'trojan') {
+        proxyForm.value.uuid = ''
+        proxyForm.value.flow = ''
+      } else if (type === 'http') {
+        proxyForm.value.uuid = ''
+        proxyForm.value.flow = ''
+      }
+    }
+  }
+  proxyFieldErrors.value = {}
+}
+
 function resetProxyForm() {
   proxyForm.value = {
     id: '',
+    original_type: 'http',
+    original_has_secret: false,
     name: '',
     type: 'http',
     server: '',
@@ -542,19 +617,27 @@ function resetProxyForm() {
     tls_enabled: false,
     tls_server_name: '',
     tls_insecure: false,
+    tls_alpn: '',
     transport_type: 'tcp',
     transport_path: '',
     transport_host: '',
+    has_saved_secret: false,
+    replace_secret: false,
     clear_secret: false,
   }
+  proxyFieldErrors.value = {}
   proxyFormOpen.value = false
 }
 
 function editProxyNode(node: nodes.Node) {
+  const hasSecret = Boolean(node.has_secret || node.has_password)
+  const nodeType = ((node.type as any) || 'http') as 'http' | 'shadowsocks' | 'vmess' | 'vless' | 'trojan'
   proxyForm.value = {
     id: node.id,
+    original_type: nodeType,
+    original_has_secret: hasSecret,
     name: node.name,
-    type: (node.type as any) || 'http',
+    type: nodeType,
     server: node.server,
     port: node.port,
     egress: (node.egress as any) || 'b',
@@ -566,58 +649,490 @@ function editProxyNode(node: nodes.Node) {
     tls_enabled: node.tls?.enabled || (node.type === 'trojan'),
     tls_server_name: node.tls?.server_name || '',
     tls_insecure: node.tls?.insecure || false,
+    tls_alpn: node.tls?.alpn ? node.tls.alpn.join(', ') : '',
     transport_type: (node.transport?.type === 'ws' ? 'ws' : 'tcp'),
     transport_path: node.transport?.path || '',
     transport_host: node.transport?.host || '',
+    has_saved_secret: hasSecret,
+    replace_secret: !hasSecret,
     clear_secret: false,
   }
+  proxyFieldErrors.value = {}
   proxyFormOpen.value = true
+}
+
+function validateProxyForm(): boolean {
+  proxyFieldErrors.value = {}
+  const f = proxyForm.value
+  const protoMeta = proxyProtocols.find(p => p.value === f.type)
+  let isValid = true
+
+  if (!f.name || !f.name.trim()) {
+    proxyFieldErrors.value.name = '请输入节点名称'
+    isValid = false
+  } else if (f.name.length > 80) {
+    proxyFieldErrors.value.name = '节点名称最多 80 个字符'
+    isValid = false
+  }
+
+  if (!f.server || !f.server.trim()) {
+    proxyFieldErrors.value.server = '请输入服务器地址（IPv4 或域名）'
+    isValid = false
+  } else if (f.server.includes(' ')) {
+    proxyFieldErrors.value.server = '服务器地址不能包含空格'
+    isValid = false
+  }
+
+  if (!f.port || f.port < 1 || f.port > 65535) {
+    proxyFieldErrors.value.port = '端口必须在 1-65535 之间'
+    isValid = false
+  }
+
+  const isProtocolChanged = Boolean(f.id && f.type !== f.original_type)
+  const hasSavedSecretForCurrentProtocol = f.has_saved_secret && !isProtocolChanged
+  const needsSecret = !f.id || f.replace_secret || !hasSavedSecretForCurrentProtocol
+  if (needsSecret && !f.clear_secret) {
+    if (f.type === 'shadowsocks' && !f.password) {
+      proxyFieldErrors.value.password = 'Shadowsocks 密码为必填项'
+      isValid = false
+    } else if (f.type === 'trojan' && !f.password) {
+      proxyFieldErrors.value.password = 'Trojan 密码为必填项'
+      isValid = false
+    } else if (f.type === 'vmess' || f.type === 'vless') {
+      if (!f.uuid || !f.uuid.trim()) {
+        proxyFieldErrors.value.uuid = `${f.type.toUpperCase()} UUID 为必填项`
+        isValid = false
+      } else {
+        const uuidRegex = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/
+        if (!uuidRegex.test(f.uuid.trim())) {
+          proxyFieldErrors.value.uuid = 'UUID 格式无效，必须为 36 位标准 UUID（如 8-4-4-4-12）'
+          isValid = false
+        }
+      }
+    }
+  }
+
+  const isTLSEnabled = Boolean(protoMeta?.supportsTLS && (protoMeta.forceTLS || f.tls_enabled))
+  if (isTLSEnabled) {
+    if (f.tls_server_name && (f.tls_server_name.includes(' ') || f.tls_server_name.length > 253)) {
+      proxyFieldErrors.value.tls_server_name = 'TLS Server Name 不能包含空格且长度不超过 253'
+      isValid = false
+    }
+    if (f.tls_alpn) {
+      const tokens = f.tls_alpn.split(/[,;\s]+/).map(s => s.trim()).filter(Boolean)
+      for (const tok of tokens) {
+        if (tok.length > 32) {
+          proxyFieldErrors.value.tls_alpn = `ALPN 单项 "${tok}" 长度超过 32 字符`
+          isValid = false
+          break
+        }
+      }
+    }
+  }
+
+  const isWSEnabled = Boolean(protoMeta?.supportsTransport && f.transport_type === 'ws')
+  if (isWSEnabled) {
+    if (f.transport_path) {
+      if (!f.transport_path.startsWith('/')) {
+        proxyFieldErrors.value.transport_path = 'WebSocket Path 必须以 "/" 开头（例如 /ws）'
+        isValid = false
+      } else if (f.transport_path.length > 2048) {
+        proxyFieldErrors.value.transport_path = 'WebSocket Path 长度不能超过 2048 字符'
+        isValid = false
+      }
+    }
+    if (f.transport_host && (f.transport_host.includes(' ') || f.transport_host.length > 253)) {
+      proxyFieldErrors.value.transport_host = 'WebSocket Host 不能包含空格且长度不超过 253'
+      isValid = false
+    }
+  }
+
+  return isValid
 }
 
 async function saveProxyNode() {
   error.value = ''
   notice.value = ''
+  if (!validateProxyForm()) {
+    error.value = '请更正表单中的输入错误。'
+    return
+  }
+  if (isRunning.value) {
+    error.value = '核心运行中，禁止修改或添加节点；请先停止核心。'
+    return
+  }
   busy.value = true
   try {
     const f = proxyForm.value
-    const input: nodes.Input = {
+    const protoMeta = proxyProtocols.find(p => p.value === f.type)
+    const alpnTokens = f.tls_alpn ? f.tls_alpn.split(/[,;\s]+/).map(s => s.trim()).filter(Boolean) : undefined
+    const isTLSEnabled = Boolean(protoMeta?.supportsTLS && (protoMeta.forceTLS || f.tls_enabled))
+    const isWSEnabled = Boolean(protoMeta?.supportsTransport && f.transport_type === 'ws')
+
+    const authInput: nodes.AuthenticationInput = {
+      username: f.type === 'http' ? (f.username?.trim() || undefined) : undefined,
+      password: (f.type === 'http' || f.type === 'shadowsocks' || f.type === 'trojan') ? (f.password || undefined) : undefined,
+      method: f.type === 'shadowsocks' ? (f.method || undefined) : undefined,
+      uuid: (f.type === 'vmess' || f.type === 'vless') ? (f.uuid?.trim() || undefined) : undefined,
+      flow: (protoMeta?.supportsFlow && f.type === 'vless') ? (f.flow || undefined) : undefined,
+    }
+
+    const tlsInput: nodes.TLSInput | undefined = isTLSEnabled ? {
+      enabled: true,
+      server_name: f.tls_server_name?.trim() || undefined,
+      insecure: f.tls_insecure || false,
+      alpn: alpnTokens && alpnTokens.length ? alpnTokens : undefined,
+    } : undefined
+
+    const transportInput: nodes.TransportInput | undefined = isWSEnabled ? {
+      type: 'ws',
+      path: f.transport_path?.trim() || undefined,
+      host: f.transport_host?.trim() || undefined,
+    } : undefined
+
+    const hasNewSecret = Boolean(authInput.password || authInput.uuid)
+    const isProtocolChanged = Boolean(f.id && f.type !== f.original_type)
+    const shouldClearSecret = f.clear_secret || (isProtocolChanged && !hasNewSecret)
+
+    const input = {
       id: f.id || undefined,
-      name: f.name,
+      name: f.name.trim(),
       type: f.type,
-      server: f.server,
+      server: f.server.trim(),
       port: f.port,
       egress: f.egress,
-      clear_secret: f.clear_secret,
-      authentication: {
-        username: f.type === 'http' ? f.username : undefined,
-        password: (f.type === 'http' || f.type === 'shadowsocks' || f.type === 'trojan') ? (f.password || undefined) : undefined,
-        method: f.type === 'shadowsocks' ? f.method : undefined,
-        uuid: (f.type === 'vmess' || f.type === 'vless') ? (f.uuid || undefined) : undefined,
-        flow: f.type === 'vless' ? (f.flow || undefined) : undefined,
-      },
-      tls: (f.type === 'trojan' || f.tls_enabled) ? {
-        enabled: true,
-        server_name: f.tls_server_name || undefined,
-        insecure: f.tls_insecure,
-      } : undefined,
-      transport: f.transport_type === 'ws' ? {
-        type: 'ws',
-        path: f.transport_path || undefined,
-        host: f.transport_host || undefined,
-      } : undefined,
-    }
-    if (isRunning.value) {
-      error.value = '核心运行中，禁止修改或添加节点；请先停止核心。'
-      return
-    }
+      clear_secret: shouldClearSecret,
+      authentication: authInput,
+      tls: tlsInput,
+      transport: transportInput,
+    } as unknown as nodes.Input
+
     if (input.id) await UpdateProxyNode(input)
     else await AddProxyNode(input)
     proxyNodes.value = await ListProxyNodes()
-    notice.value = input.id ? '代理节点已更新，未填写新凭据时保留原凭据。' : '代理节点已添加并安全保存。'
+    if (input.id) {
+      if (shouldClearSecret) notice.value = '代理节点已更新，已清除旧凭据。'
+      else if (f.replace_secret || hasNewSecret) notice.value = '代理节点已更新，新凭据已安全保存。'
+      else notice.value = '代理节点已更新，已保留原有加密凭据。'
+    } else {
+      notice.value = '代理节点已添加并安全保存。'
+    }
     resetProxyForm()
   } catch (reason) {
     error.value = `无法保存代理节点：${messageOf(reason)}`
   } finally { busy.value = false }
+}
+
+function openImportBox() {
+  proxyImportURI.value = ''
+  proxyImportError.value = ''
+  proxyImportOpen.value = true
+}
+
+function closeImportBox() {
+  proxyImportOpen.value = false
+  proxyImportURI.value = ''
+  proxyImportError.value = ''
+}
+
+function safeBase64Decode(raw: string): string {
+  let str = raw.trim().replace(/-/g, '+').replace(/_/g, '/')
+  while (str.length % 4 !== 0) {
+    str += '='
+  }
+  const binary = atob(str)
+  const bytes = new Uint8Array(binary.length)
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i)
+  }
+  return new TextDecoder('utf-8').decode(bytes)
+}
+
+function parseProxyURI(uri: string) {
+  const trimmed = uri.trim()
+  if (!trimmed) throw new Error('链接内容为空')
+
+  if (trimmed.startsWith('ss://')) {
+    let body = trimmed.slice(5)
+    let tag = ''
+    const hashIdx = body.indexOf('#')
+    if (hashIdx !== -1) {
+      tag = decodeURIComponent(body.slice(hashIdx + 1))
+      body = body.slice(0, hashIdx)
+    }
+    let method = 'aes-256-gcm'
+    let password = ''
+    let server = ''
+    let port = 8388
+
+    if (body.includes('@')) {
+      const atIdx = body.indexOf('@')
+      const userInfoEncoded = body.slice(0, atIdx)
+      const serverPort = body.slice(atIdx + 1)
+      let userInfo = ''
+      try {
+        userInfo = safeBase64Decode(userInfoEncoded)
+      } catch {
+        userInfo = userInfoEncoded
+      }
+      const colonIdx = userInfo.indexOf(':')
+      if (colonIdx !== -1) {
+        method = userInfo.slice(0, colonIdx)
+        password = userInfo.slice(colonIdx + 1)
+      }
+      const lastColon = serverPort.lastIndexOf(':')
+      if (lastColon !== -1) {
+        server = serverPort.slice(0, lastColon)
+        port = parseInt(serverPort.slice(lastColon + 1), 10) || 8388
+      } else {
+        server = serverPort
+      }
+    } else {
+      let decoded = ''
+      try {
+        decoded = safeBase64Decode(body)
+      } catch {
+        throw new Error('无效的 Shadowsocks base64 编码')
+      }
+      const atIdx = decoded.indexOf('@')
+      if (atIdx !== -1) {
+        const userInfo = decoded.slice(0, atIdx)
+        const serverPort = decoded.slice(atIdx + 1)
+        const colonIdx = userInfo.indexOf(':')
+        if (colonIdx !== -1) {
+          method = userInfo.slice(0, colonIdx)
+          password = userInfo.slice(colonIdx + 1)
+        }
+        const lastColon = serverPort.lastIndexOf(':')
+        if (lastColon !== -1) {
+          server = serverPort.slice(0, lastColon)
+          port = parseInt(serverPort.slice(lastColon + 1), 10) || 8388
+        } else {
+          server = serverPort
+        }
+      }
+    }
+
+    const methodLower = method.toLowerCase().trim()
+    if (!ssMethods.includes(methodLower)) {
+      throw new Error(`不支持的 Shadowsocks 加密方法 "${method}"，后端当前仅支持: ${ssMethods.join(', ')}`)
+    }
+
+    return {
+      name: tag || `${server}:${port}`,
+      type: 'shadowsocks' as const,
+      server,
+      port,
+      method: methodLower,
+      password,
+    }
+  }
+
+  if (trimmed.startsWith('vmess://')) {
+    const b64 = trimmed.slice(8)
+    let jsonStr = ''
+    try {
+      jsonStr = safeBase64Decode(b64)
+    } catch {
+      throw new Error('无效的 VMess base64 编码')
+    }
+    const data = JSON.parse(jsonStr)
+    return {
+      name: data.ps || `${data.add}:${data.port}`,
+      type: 'vmess' as const,
+      server: data.add || '',
+      port: Number(data.port) || 443,
+      uuid: data.id || '',
+      tls_enabled: data.tls === 'tls',
+      tls_server_name: data.sni || data.host || '',
+      transport_type: (data.net === 'ws' ? 'ws' : 'tcp') as 'tcp' | 'ws',
+      transport_path: data.path || '',
+      transport_host: data.host || '',
+      tls_alpn: data.alpn || '',
+    }
+  }
+
+  if (trimmed.startsWith('vless://')) {
+    const url = new URL(trimmed)
+    const uuid = url.username
+    const server = url.hostname
+    const port = parseInt(url.port, 10) || 443
+    const tag = decodeURIComponent(url.hash.replace(/^#/, ''))
+    const params = url.searchParams
+    const security = (params.get('security') || '').toLowerCase()
+    if (security === 'reality') {
+      throw new Error('暂不支持 VLESS Reality 协议链接（需要服务端与客户端 Reality 公钥及 Short ID 支持）')
+    }
+    const isTLS = security === 'tls'
+    const isWS = params.get('type') === 'ws'
+    return {
+      name: tag || `${server}:${port}`,
+      type: 'vless' as const,
+      server,
+      port,
+      uuid,
+      flow: params.get('flow') || '',
+      tls_enabled: isTLS,
+      tls_server_name: params.get('sni') || '',
+      tls_insecure: params.get('allowInsecure') === '1' || params.get('insecure') === '1',
+      tls_alpn: params.get('alpn') || '',
+      transport_type: (isWS ? 'ws' : 'tcp') as 'tcp' | 'ws',
+      transport_path: params.get('path') || '',
+      transport_host: params.get('host') || '',
+    }
+  }
+
+  if (trimmed.startsWith('trojan://')) {
+    const url = new URL(trimmed)
+    const password = url.username
+    const server = url.hostname
+    const port = parseInt(url.port, 10) || 443
+    const tag = decodeURIComponent(url.hash.replace(/^#/, ''))
+    const params = url.searchParams
+    const isWS = params.get('type') === 'ws'
+    return {
+      name: tag || `${server}:${port}`,
+      type: 'trojan' as const,
+      server,
+      port,
+      password,
+      tls_enabled: true,
+      tls_server_name: params.get('sni') || '',
+      tls_insecure: params.get('allowInsecure') === '1' || params.get('insecure') === '1',
+      tls_alpn: params.get('alpn') || '',
+      transport_type: (isWS ? 'ws' : 'tcp') as 'tcp' | 'ws',
+      transport_path: params.get('path') || '',
+      transport_host: params.get('host') || '',
+    }
+  }
+
+  if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
+    const url = new URL(trimmed)
+    const tag = decodeURIComponent(url.hash.replace(/^#/, ''))
+    return {
+      name: tag || `${url.hostname}:${url.port || 8080}`,
+      type: 'http' as const,
+      server: url.hostname,
+      port: parseInt(url.port, 10) || 8080,
+      username: url.username ? decodeURIComponent(url.username) : '',
+      password: url.password ? decodeURIComponent(url.password) : '',
+    }
+  }
+
+  throw new Error('不支持的链接协议，支持 ss://, vmess://, vless://, trojan://, http://')
+}
+
+function applyImportURI() {
+  proxyImportError.value = ''
+  try {
+    const parsed = parseProxyURI(proxyImportURI.value)
+    resetProxyForm()
+    proxyForm.value = {
+      id: '',
+      original_type: parsed.type,
+      original_has_secret: false,
+      name: parsed.name || '',
+      type: parsed.type,
+      server: parsed.server,
+      port: parsed.port,
+      egress: 'b',
+      username: (parsed as any).username || '',
+      password: (parsed as any).password || '',
+      method: (parsed as any).method || 'aes-256-gcm',
+      uuid: (parsed as any).uuid || '',
+      flow: (parsed as any).flow || '',
+      tls_enabled: (parsed as any).tls_enabled || (parsed.type === 'trojan'),
+      tls_server_name: (parsed as any).tls_server_name || '',
+      tls_insecure: (parsed as any).tls_insecure || false,
+      tls_alpn: (parsed as any).tls_alpn || '',
+      transport_type: (parsed as any).transport_type || 'tcp',
+      transport_path: (parsed as any).transport_path || '',
+      transport_host: (parsed as any).transport_host || '',
+      has_saved_secret: false,
+      replace_secret: true,
+      clear_secret: false,
+    }
+    proxyFormOpen.value = true
+    closeImportBox()
+    notice.value = `已从链接导入节点“${proxyForm.value.name}”，请核对并保存。`
+  } catch (reason) {
+    proxyImportError.value = `导入解析失败：${messageOf(reason)}`
+  }
+}
+
+async function copyProxyNodeInfo(node: nodes.Node) {
+  try {
+    let text = `${node.name}\n`
+    text += `类型: ${node.type === 'http' ? 'HTTP CONNECT' : node.type.toUpperCase()}\n`
+    text += `服务器: ${node.server}:${node.port}\n`
+    text += `出口: 接口 ${node.egress.toUpperCase()}\n`
+    if (node.authentication?.username) text += `用户名: ${node.authentication.username}\n`
+    if (node.authentication?.method) text += `加密方法: ${node.authentication.method}\n`
+    if (node.authentication?.flow) text += `Flow: ${node.authentication.flow}\n`
+    if (node.tls?.enabled || node.type === 'trojan') {
+      text += `TLS: 启用`
+      if (node.tls?.server_name) text += ` (SNI: ${node.tls.server_name})`
+      if (node.tls?.alpn?.length) text += ` (ALPN: ${node.tls.alpn.join(', ')})`
+      if (node.tls?.insecure) text += ` (Insecure)`
+      text += `\n`
+    }
+    if (node.transport?.type === 'ws') {
+      text += `传输: WebSocket`
+      if (node.transport.path) text += ` (Path: ${node.transport.path})`
+      if (node.transport.host) text += ` (Host: ${node.transport.host})`
+      text += `\n`
+    }
+    await navigator.clipboard.writeText(text)
+    notice.value = `已复制节点“${node.name}”配置摘要到剪贴板。`
+  } catch (reason) {
+    error.value = `复制失败：${messageOf(reason)}`
+  }
+}
+
+function formatProxySummary(node: nodes.Node): string[] {
+  const parts: string[] = []
+  if (node.type === 'http') {
+    parts.push('HTTP CONNECT')
+    if (node.authentication?.username || node.username) {
+      parts.push(`用户: ${node.authentication?.username || node.username}`)
+    }
+  } else if (node.type === 'shadowsocks') {
+    parts.push(`SS · ${node.authentication?.method || node.username || 'aes-256-gcm'}`)
+  } else if (node.type === 'vmess') {
+    parts.push('VMess')
+  } else if (node.type === 'vless') {
+    parts.push('VLESS')
+    if (node.authentication?.flow) {
+      parts.push(node.authentication.flow)
+    }
+  } else if (node.type === 'trojan') {
+    parts.push('Trojan')
+  } else {
+    parts.push(node.type.toUpperCase())
+  }
+
+  if (node.type === 'trojan' || node.tls?.enabled) {
+    let tlsText = 'TLS'
+    const sub: string[] = []
+    if (node.tls?.server_name) sub.push(`SNI: ${node.tls.server_name}`)
+    if (node.tls?.alpn?.length) sub.push(`ALPN: ${node.tls.alpn.join(',')}`)
+    if (node.tls?.insecure) sub.push('Insecure')
+    if (sub.length) tlsText += ` (${sub.join(' · ')})`
+    parts.push(tlsText)
+  }
+
+  if (node.transport?.type === 'ws') {
+    let wsText = 'WS'
+    const wsSub: string[] = []
+    if (node.transport.path) wsSub.push(node.transport.path)
+    if (node.transport.host) wsSub.push(`host: ${node.transport.host}`)
+    if (wsSub.length) wsText += ` (${wsSub.join(' · ')})`
+    parts.push(wsText)
+  } else if (node.type === 'vmess' || node.type === 'vless' || node.type === 'trojan') {
+    parts.push('TCP')
+  }
+
+  return parts
 }
 
 async function selectProxyNode(id: string) {
@@ -1233,57 +1748,150 @@ onBeforeUnmount(() => {
           <small>代理 endpoint 同时使用出口 B 绑定和专用 /32 规则防止再次进入代理。</small>
         </section>
         <section class="proxy-heading">
-          <div><p class="section-kicker">HTTP / Shadowsocks / VMess / VLESS / Trojan</p><h2>代理节点管理</h2><p>节点凭据通过当前 Windows 用户的 DPAPI 加密，界面和日志不会读取或显示原文。</p></div>
-          <div class="proxy-heading-actions"><label>排序<select v-model="proxySort"><option value="favorite">收藏优先</option><option value="latency">延迟最低</option><option value="name">名称</option></select></label><button class="secondary" type="button" :disabled="testingAllProxies || !proxyNodes.length" @click="speedTestAllProxies">{{ testingAllProxies ? '测速中' : '全部测速' }}</button><button class="primary" type="button" @click="proxyFormOpen ? resetProxyForm() : proxyFormOpen = true">{{ proxyFormOpen ? '取消编辑' : '添加节点' }}</button></div>
+          <div>
+            <p class="section-kicker">HTTP CONNECT / Shadowsocks / VMess / VLESS / Trojan</p>
+            <h2>代理节点管理</h2>
+            <p>节点凭据通过当前 Windows 用户的 DPAPI 加密，界面和日志不会读取或显示原文。</p>
+          </div>
+          <div class="proxy-heading-actions">
+            <label>排序<select v-model="proxySort"><option value="favorite">收藏优先</option><option value="latency">延迟最低</option><option value="name">名称</option></select></label>
+            <button class="secondary" type="button" :disabled="testingAllProxies || !proxyNodes.length" @click="speedTestAllProxies">{{ testingAllProxies ? '测速中' : '全部测速' }}</button>
+            <button class="secondary" type="button" @click="proxyImportOpen ? closeImportBox() : openImportBox()">{{ proxyImportOpen ? '取消导入' : '从链接导入' }}</button>
+            <button class="primary" type="button" @click="proxyFormOpen ? resetProxyForm() : openNewProxyForm()">{{ proxyFormOpen ? '取消编辑' : '添加节点' }}</button>
+          </div>
         </section>
+
+        <!-- Import from link card -->
+        <section v-if="proxyImportOpen" class="proxy-import-box" aria-label="从链接导入节点">
+          <div><strong>从节点分享链接导入</strong><p class="proxy-form-hint">支持 ss://、vmess://、vless://、trojan://、http:// 等单节点链接，解析后将自动填充表单供您核对与保存。</p></div>
+          <textarea v-model="proxyImportURI" placeholder="粘贴节点链接，例如：vless://... 或 ss://..."></textarea>
+          <p v-if="proxyImportError" class="field-error-msg">{{ proxyImportError }}</p>
+          <div class="proxy-import-actions">
+            <button class="secondary" type="button" @click="closeImportBox">取消</button>
+            <button class="primary" type="button" :disabled="!proxyImportURI.trim()" @click="applyImportURI">解析并填入表单</button>
+          </div>
+        </section>
+
+        <!-- Node form -->
         <form v-if="proxyFormOpen" class="proxy-form" @submit.prevent="saveProxyNode">
-          <label>节点名称<input v-model.trim="proxyForm.name" required maxlength="80" placeholder="例如：办公代理"></label>
-          <label>协议类型
-            <select v-model="proxyForm.type">
-              <option value="http">HTTP CONNECT</option>
-              <option value="shadowsocks">Shadowsocks</option>
-              <option value="vmess">VMess</option>
-              <option value="vless">VLESS</option>
-              <option value="trojan">Trojan</option>
-            </select>
+          <!-- Protocol Selector Bar -->
+          <div class="protocol-selector-row">
+            <span class="protocol-selector-label">选择节点协议（点击直接切换对应协议的全部专属配置字段）</span>
+            <div class="protocol-switch" role="tablist" aria-label="协议类型选择">
+              <button
+                v-for="proto in proxyProtocols"
+                :key="proto.value"
+                type="button"
+                :class="{ active: proxyForm.type === proto.value }"
+                @click="selectProtocol(proto.value)"
+              >
+                {{ proto.label }}
+              </button>
+            </div>
+          </div>
+
+          <label>
+            节点名称
+            <input v-model.trim="proxyForm.name" required maxlength="80" placeholder="例如：办公代理">
+            <span v-if="proxyFieldErrors.name" class="field-error-msg">{{ proxyFieldErrors.name }}</span>
           </label>
-          <label>物理出口
+          <label>
+            物理出口
             <select v-model="proxyForm.egress">
               <option value="b">接口 B（默认）</option>
               <option value="a">接口 A</option>
             </select>
           </label>
-          <label>服务器地址<input v-model.trim="proxyForm.server" required placeholder="203.0.113.10 或 proxy.example.com"></label>
-          <label>端口<input v-model.number="proxyForm.port" required type="number" min="1" max="65535"></label>
+          <label>
+            服务器地址
+            <input v-model.trim="proxyForm.server" required placeholder="203.0.113.10 或 proxy.example.com">
+            <span v-if="proxyFieldErrors.server" class="field-error-msg">{{ proxyFieldErrors.server }}</span>
+          </label>
+          <label>
+            端口
+            <input v-model.number="proxyForm.port" required type="number" min="1" max="65535">
+            <span v-if="proxyFieldErrors.port" class="field-error-msg">{{ proxyFieldErrors.port }}</span>
+          </label>
+
+          <!-- Credential Management for Existing Nodes -->
+          <div v-if="proxyForm.id" class="credential-status-box">
+            <div class="credential-status-header">
+              <div>
+                <strong>{{ proxyForm.has_saved_secret ? '🔒 节点凭据状态：已加密保存' : '节点凭据状态：未配置凭据' }}</strong>
+                <small v-if="proxyForm.has_saved_secret">凭据通过 Windows DPAPI 本地保护，无需重复输入。</small>
+              </div>
+              <div class="credential-controls">
+                <label v-if="proxyForm.has_saved_secret" class="toggle">
+                  <input v-model="proxyForm.replace_secret" type="checkbox" :disabled="proxyForm.clear_secret">
+                  <span>{{ proxyForm.replace_secret ? '替换凭据' : '保留原凭据' }}</span>
+                </label>
+                <label v-if="proxyForm.type === 'http' && proxyForm.has_saved_secret" class="clear-secret">
+                  <input v-model="proxyForm.clear_secret" type="checkbox" @change="proxyForm.clear_secret && (proxyForm.replace_secret = false)">
+                  <span>清除已保存凭据</span>
+                </label>
+              </div>
+            </div>
+            <p v-if="proxyForm.id" class="proxy-operation-indicator">
+              {{
+                proxyForm.type !== proxyForm.original_type
+                  ? (proxyForm.password || proxyForm.uuid
+                      ? '操作预期：协议已切换，保存后将使用新凭据覆盖原有凭据。'
+                      : '操作预期：协议已切换，未提供新密码/凭据，保存后将清除原协议的加密凭据。')
+                  : (proxyForm.clear_secret
+                      ? '操作预期：保存后将清除已保存的密码与认证凭据。'
+                      : (proxyForm.replace_secret
+                          ? '操作预期：保存后将使用下方新输入的凭据覆盖原有凭据。'
+                          : '操作预期：保存后将保留原有加密凭据不变。'))
+              }}
+            </p>
+          </div>
 
           <!-- HTTP Fields -->
           <template v-if="proxyForm.type === 'http'">
-            <label>用户名<input v-model.trim="proxyForm.username" autocomplete="off" placeholder="可选"></label>
-            <label>密码<input v-model="proxyForm.password" type="password" autocomplete="new-password" :disabled="proxyForm.clear_secret" :placeholder="proxyForm.id ? '留空则保留原密码' : '可选'"></label>
+            <label>
+              用户名
+              <input v-model.trim="proxyForm.username" autocomplete="off" placeholder="可选用户名">
+            </label>
+            <label v-if="!proxyForm.id || proxyForm.replace_secret || !proxyForm.has_saved_secret">
+              密码
+              <input v-model="proxyForm.password" type="password" autocomplete="new-password" :disabled="proxyForm.clear_secret" :placeholder="proxyForm.id ? '输入新密码' : '可选密码'">
+              <span v-if="proxyFieldErrors.password" class="field-error-msg">{{ proxyFieldErrors.password }}</span>
+            </label>
           </template>
 
           <!-- Shadowsocks Fields -->
           <template v-else-if="proxyForm.type === 'shadowsocks'">
-            <label>加密方法
+            <label>
+              加密方法
               <select v-model="proxyForm.method" required>
-                <option value="aes-128-gcm">aes-128-gcm</option>
-                <option value="aes-256-gcm">aes-256-gcm</option>
-                <option value="chacha20-ietf-poly1305">chacha20-ietf-poly1305</option>
-                <option value="xchacha20-ietf-poly1305">xchacha20-ietf-poly1305</option>
+                <option v-for="method in ssMethods" :key="method" :value="method">{{ method }}</option>
               </select>
             </label>
-            <label>密码<input v-model="proxyForm.password" type="password" autocomplete="new-password" :required="!proxyForm.id" :disabled="proxyForm.clear_secret" :placeholder="proxyForm.id ? '留空则保留原密码' : '必填'"></label>
+            <label v-if="!proxyForm.id || proxyForm.replace_secret || !proxyForm.has_saved_secret">
+              密码
+              <input v-model="proxyForm.password" type="password" autocomplete="new-password" :required="!proxyForm.id || proxyForm.replace_secret" placeholder="必填密码">
+              <span v-if="proxyFieldErrors.password" class="field-error-msg">{{ proxyFieldErrors.password }}</span>
+            </label>
           </template>
 
           <!-- VMess Fields -->
           <template v-else-if="proxyForm.type === 'vmess'">
-            <label>UUID<input v-model.trim="proxyForm.uuid" autocomplete="off" :required="!proxyForm.id" :disabled="proxyForm.clear_secret" :placeholder="proxyForm.id ? '留空则保留原 UUID' : '例如：a8e678c0-...'"></label>
+            <label v-if="!proxyForm.id || proxyForm.replace_secret || !proxyForm.has_saved_secret">
+              UUID
+              <input v-model.trim="proxyForm.uuid" autocomplete="off" :required="!proxyForm.id || proxyForm.replace_secret" placeholder="例如：a8e678c0-51c0-4212-9c17-1f4bf7ec0000">
+              <span v-if="proxyFieldErrors.uuid" class="field-error-msg">{{ proxyFieldErrors.uuid }}</span>
+            </label>
           </template>
 
           <!-- VLESS Fields -->
           <template v-else-if="proxyForm.type === 'vless'">
-            <label>UUID<input v-model.trim="proxyForm.uuid" autocomplete="off" :required="!proxyForm.id" :disabled="proxyForm.clear_secret" :placeholder="proxyForm.id ? '留空则保留原 UUID' : '例如：a8e678c0-...'"></label>
-            <label>Flow
+            <label v-if="!proxyForm.id || proxyForm.replace_secret || !proxyForm.has_saved_secret">
+              UUID
+              <input v-model.trim="proxyForm.uuid" autocomplete="off" :required="!proxyForm.id || proxyForm.replace_secret" placeholder="例如：a8e678c0-51c0-4212-9c17-1f4bf7ec0000">
+              <span v-if="proxyFieldErrors.uuid" class="field-error-msg">{{ proxyFieldErrors.uuid }}</span>
+            </label>
+            <label>
+              Flow
               <select v-model="proxyForm.flow">
                 <option value="">无 (none)</option>
                 <option value="xtls-rprx-vision">xtls-rprx-vision</option>
@@ -1293,47 +1901,81 @@ onBeforeUnmount(() => {
 
           <!-- Trojan Fields -->
           <template v-else-if="proxyForm.type === 'trojan'">
-            <label>密码<input v-model="proxyForm.password" type="password" autocomplete="new-password" :required="!proxyForm.id" :disabled="proxyForm.clear_secret" :placeholder="proxyForm.id ? '留空则保留原密码' : '必填'"></label>
+            <label v-if="!proxyForm.id || proxyForm.replace_secret || !proxyForm.has_saved_secret">
+              密码
+              <input v-model="proxyForm.password" type="password" autocomplete="new-password" :required="!proxyForm.id || proxyForm.replace_secret" placeholder="必填密码">
+              <span v-if="proxyFieldErrors.password" class="field-error-msg">{{ proxyFieldErrors.password }}</span>
+            </label>
           </template>
 
           <!-- TLS settings for VMess / VLESS / Trojan -->
           <template v-if="proxyForm.type === 'vmess' || proxyForm.type === 'vless' || proxyForm.type === 'trojan'">
-            <label v-if="proxyForm.type !== 'trojan'" class="clear-secret">
-              <input v-model="proxyForm.tls_enabled" type="checkbox"> 启用 TLS
+            <label class="clear-secret">
+              <input v-if="proxyForm.type !== 'trojan'" v-model="proxyForm.tls_enabled" type="checkbox">
+              <input v-else type="checkbox" checked disabled>
+              <span>{{ proxyForm.type === 'trojan' ? '强制启用 TLS（Trojan 协议规范）' : '启用 TLS' }}</span>
             </label>
             <template v-if="proxyForm.type === 'trojan' || proxyForm.tls_enabled">
-              <label>TLS Server Name (SNI)<input v-model.trim="proxyForm.tls_server_name" placeholder="留空使用服务器地址"></label>
-              <label class="clear-secret"><input v-model="proxyForm.tls_insecure" type="checkbox"> 允许不安全证书 (Insecure)</label>
+              <label>
+                TLS Server Name (SNI)
+                <input v-model.trim="proxyForm.tls_server_name" placeholder="留空默认使用服务器地址">
+                <span v-if="proxyFieldErrors.tls_server_name" class="field-error-msg">{{ proxyFieldErrors.tls_server_name }}</span>
+              </label>
+              <label>
+                TLS ALPN
+                <input v-model.trim="proxyForm.tls_alpn" placeholder="例如：h2, http/1.1（逗号分隔）">
+                <span v-if="proxyFieldErrors.tls_alpn" class="field-error-msg">{{ proxyFieldErrors.tls_alpn }}</span>
+              </label>
+              <label class="clear-secret">
+                <input v-model="proxyForm.tls_insecure" type="checkbox">
+                <span>允许不安全证书 (Insecure)</span>
+              </label>
             </template>
 
             <!-- Transport Settings -->
-            <label>传输协议
+            <label>
+              传输协议
               <select v-model="proxyForm.transport_type">
                 <option value="tcp">TCP</option>
                 <option value="ws">WebSocket (WS)</option>
               </select>
             </label>
             <template v-if="proxyForm.transport_type === 'ws'">
-              <label>WebSocket Path<input v-model.trim="proxyForm.transport_path" placeholder="例如：/ws 或 /chat"></label>
-              <label>WebSocket Host<input v-model.trim="proxyForm.transport_host" placeholder="例如：proxy.example.com"></label>
+              <label>
+                WebSocket Path
+                <input v-model.trim="proxyForm.transport_path" placeholder="必须以 / 开头，例如：/ws 或 /chat">
+                <span v-if="proxyFieldErrors.transport_path" class="field-error-msg">{{ proxyFieldErrors.transport_path }}</span>
+              </label>
+              <label>
+                WebSocket Host
+                <input v-model.trim="proxyForm.transport_host" placeholder="例如：proxy.example.com">
+                <span v-if="proxyFieldErrors.transport_host" class="field-error-msg">{{ proxyFieldErrors.transport_host }}</span>
+              </label>
             </template>
           </template>
 
-          <label v-if="proxyForm.id" class="clear-secret"><input v-model="proxyForm.clear_secret" type="checkbox">清除已保存凭据</label>
-          <div class="proxy-form-actions"><button class="secondary" type="button" @click="resetProxyForm">取消</button><button class="primary" type="submit" :disabled="busy">{{ busy ? '正在保存' : proxyForm.id ? '保存修改' : '添加节点' }}</button></div>
+          <div class="proxy-form-actions">
+            <button class="secondary" type="button" @click="resetProxyForm">取消</button>
+            <button class="primary" type="submit" :disabled="busy">{{ busy ? '正在保存' : proxyForm.id ? '保存修改' : '添加节点' }}</button>
+          </div>
         </form>
+
         <section class="proxy-list" aria-label="代理节点列表">
           <div v-if="!proxyNodes.length" class="proxy-empty">尚未添加代理节点。</div>
           <article v-for="node in sortedProxyNodes" :key="node.id" :class="{ selected: node.selected }">
-            <div class="proxy-status"><button class="favorite-button" type="button" :class="{ active: node.favorite }" :aria-label="node.favorite ? '取消收藏' : '收藏节点'" :title="node.favorite ? '取消收藏' : '收藏节点'" @click="toggleProxyFavorite(node)">{{ node.favorite ? '★' : '☆' }}</button><span :class="['selection-dot', { active: node.selected }]" aria-hidden="true"></span><div><strong>{{ node.name }}</strong><small>{{ node.type.toUpperCase() }} · {{ node.server }}:{{ node.port }}<template v-if="node.resolved_ip && node.resolved_ip !== node.server"> → {{ node.resolved_ip }}</template></small></div></div>
+            <div class="proxy-status">
+              <button class="favorite-button" type="button" :class="{ active: node.favorite }" :aria-label="node.favorite ? '取消收藏' : '收藏节点'" :title="node.favorite ? '取消收藏' : '收藏节点'" @click="toggleProxyFavorite(node)">{{ node.favorite ? '★' : '☆' }}</button>
+              <span :class="['selection-dot', { active: node.selected }]" aria-hidden="true"></span>
+              <div>
+                <strong>{{ node.name }}</strong>
+                <small>{{ node.type === 'http' ? 'HTTP CONNECT' : node.type.toUpperCase() }} · {{ node.server }}:{{ node.port }}<template v-if="node.resolved_ip && node.resolved_ip !== node.server"> → {{ node.resolved_ip }}</template></small>
+              </div>
+            </div>
             <div class="proxy-meta">
               <span>{{ node.egress === 'a' ? '出口 A' : '出口 B' }}</span>
-              <span>
-                <template v-if="node.type === 'http'">HTTP CONNECT{{ node.authentication?.username ? ` · ${node.authentication.username}` : '' }}</template>
-                <template v-else-if="node.type === 'shadowsocks'">SS · {{ node.authentication?.method || node.username }}</template>
-                <template v-else-if="node.type === 'vmess'">VMess{{ node.transport?.type === 'ws' ? ' · WS' : '' }}{{ node.tls?.enabled ? ' · TLS' : '' }}</template>
-                <template v-else-if="node.type === 'vless'">VLESS{{ node.authentication?.flow ? ` · ${node.authentication.flow}` : '' }}{{ node.tls?.enabled ? ' · TLS' : '' }}</template>
-                <template v-else-if="node.type === 'trojan'">Trojan{{ node.transport?.type === 'ws' ? ' · WS' : '' }} · TLS</template>
+              <span v-for="tag in formatProxySummary(node)" :key="tag" class="proxy-meta-tag">{{ tag }}</span>
+              <span :class="['credential-tag', { none: !(node.has_secret || node.has_password) }]">
+                {{ (node.has_secret || node.has_password) ? '🔒 已保存凭据' : '未设凭据' }}
               </span>
               <span v-if="proxyTests[node.id]" :class="proxyTests[node.id].available ? 'test-ok' : 'test-failed'">
                 <template v-if="proxyTests[node.id].available">
@@ -1350,6 +1992,7 @@ onBeforeUnmount(() => {
               <button class="secondary" type="button" :disabled="testingProxyID === node.id" @click="testProxy(node)">{{ testingProxyID === node.id ? '测试中' : '测试' }}</button>
               <button v-if="!node.selected" class="secondary" type="button" :disabled="isRunning" :title="isRunning ? '核心运行中，禁止切换节点' : '选择此节点'" @click="selectProxyNode(node.id)">选择</button>
               <span v-else class="selected-label">当前节点</span>
+              <button class="secondary" type="button" title="复制节点配置摘要" @click="copyProxyNodeInfo(node)">复制</button>
               <template v-if="!node.subscription_id">
                 <button class="secondary" type="button" :disabled="isRunning" :title="isRunning ? '核心运行中，禁止修改节点' : '编辑节点'" @click="editProxyNode(node)">编辑</button>
                 <button class="delete-button" type="button" :disabled="isRunning" :title="isRunning ? '核心运行中，禁止删除节点' : '删除节点'" @click="deleteProxyNode(node)">删除</button>

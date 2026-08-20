@@ -94,6 +94,8 @@ export function ResetWindowsNetworkStack():Promise<main.NetworkResetResult>;
 
 export function RunHealthProbe(arg1:observability.ProbeRequest):Promise<observability.ProbeResult>;
 
+export function SaveProxyNode(arg1:nodes.Input):Promise<nodes.Node>;
+
 export function SelectInterfaces(arg1:string,arg2:string):Promise<interfacemanager.Snapshot>;
 
 export function SelectProxyNode(arg1:string):Promise<nodes.Node>;

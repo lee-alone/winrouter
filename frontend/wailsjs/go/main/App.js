@@ -158,6 +158,10 @@ export function RunHealthProbe(arg1) {
   return window['go']['main']['App']['RunHealthProbe'](arg1);
 }
 
+export function SaveProxyNode(arg1) {
+  return window['go']['main']['App']['SaveProxyNode'](arg1);
+}
+
 export function SelectInterfaces(arg1, arg2) {
   return window['go']['main']['App']['SelectInterfaces'](arg1, arg2);
 }
