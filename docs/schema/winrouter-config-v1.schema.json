@@ -115,12 +115,37 @@
       "additionalProperties": false,
       "required": ["type", "server", "port"],
       "properties": {
-        "type": { "enum": ["http", "shadowsocks"] },
+        "type": { "enum": ["http", "shadowsocks", "vmess", "vless", "trojan"] },
         "server": { "type": "string", "minLength": 1 },
         "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+        "egress": { "enum": ["a", "b"] },
         "method": { "type": "string" },
         "username": { "type": "string" },
-        "password": { "type": "string" }
+        "password": { "type": "string" },
+        "uuid": { "type": "string" },
+        "flow": { "type": "string" },
+        "security": { "type": "string" },
+        "tls": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["enabled"],
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "server_name": { "type": "string" },
+            "insecure": { "type": "boolean" },
+            "alpn": { "type": "array", "items": { "type": "string" } }
+          }
+        },
+        "transport": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type"],
+          "properties": {
+            "type": { "enum": ["tcp", "ws"] },
+            "path": { "type": "string" },
+            "host": { "type": "string" }
+          }
+        }
       }
     }
   }

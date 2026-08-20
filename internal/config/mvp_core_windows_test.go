@@ -130,3 +130,111 @@ func TestGeneratedShadowsocksProxyPassesLockedSingBoxCheck(t *testing.T) {
 		t.Fatalf("validation report = %#v", report)
 	}
 }
+
+func TestGeneratedVMessProxyPassesLockedSingBoxCheck(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping locked core integration check")
+	}
+	input := fixtureInput(t)
+	input.Mode = ModeProxySplit
+	input.Proxy = &MVPProxy{
+		Type:      "vmess",
+		Server:    "203.0.113.88",
+		Port:      443,
+		UUID:      "a8e678c0-8903-4402-8e99-20aadf1a7cd1",
+		TLS:       &MVPProxyTLS{Enabled: true, ServerName: "proxy.example.com"},
+		Transport: &MVPProxyTransport{Type: "ws", Path: "/chat", Host: "proxy.example.com"},
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	generated, report, err := ValidateMVPWithCore(ctx, input, filepath.Join("..", "..", "resources", "core", "sing-box.exe"))
+	if err != nil {
+		t.Fatalf("ValidateMVPWithCore() error: %v", err)
+	}
+	if generated.Model.Route.Final != "proxy" || !report.ModelValid || !report.SchemaValid || !report.SemanticValid || report.Core.SHA256 == "" {
+		t.Fatalf("validation report = %#v", report)
+	}
+}
+
+func TestGeneratedVLESSProxyPassesLockedSingBoxCheck(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping locked core integration check")
+	}
+	input := fixtureInput(t)
+	input.Mode = ModeProxySplit
+	input.Proxy = &MVPProxy{
+		Type:      "vless",
+		Server:    "203.0.113.89",
+		Port:      443,
+		UUID:      "a8e678c0-8903-4402-8e99-20aadf1a7cd1",
+		Flow:      "xtls-rprx-vision",
+		TLS:       &MVPProxyTLS{Enabled: true, ServerName: "vless.example.com"},
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	generated, report, err := ValidateMVPWithCore(ctx, input, filepath.Join("..", "..", "resources", "core", "sing-box.exe"))
+	if err != nil {
+		t.Fatalf("ValidateMVPWithCore() error: %v", err)
+	}
+	if generated.Model.Route.Final != "proxy" || !report.ModelValid || !report.SchemaValid || !report.SemanticValid || report.Core.SHA256 == "" {
+		t.Fatalf("validation report = %#v", report)
+	}
+}
+
+func TestGeneratedTrojanProxyPassesLockedSingBoxCheck(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping locked core integration check")
+	}
+	input := fixtureInput(t)
+	input.Mode = ModeProxySplit
+	input.Proxy = &MVPProxy{
+		Type:     "trojan",
+		Server:   "203.0.113.90",
+		Port:     443,
+		Password: "trojanpassword",
+		TLS:      &MVPProxyTLS{Enabled: true, ServerName: "trojan.example.com"},
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	generated, report, err := ValidateMVPWithCore(ctx, input, filepath.Join("..", "..", "resources", "core", "sing-box.exe"))
+	if err != nil {
+		t.Fatalf("ValidateMVPWithCore() error: %v", err)
+	}
+	if generated.Model.Route.Final != "proxy" || !report.ModelValid || !report.SchemaValid || !report.SemanticValid || report.Core.SHA256 == "" {
+		t.Fatalf("validation report = %#v", report)
+	}
+}
+
+func TestGeneratedProxyEgressAPassesLockedSingBoxCheck(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping locked core integration check")
+	}
+	input := fixtureInput(t)
+	input.Mode = ModeProxySplit
+	input.Proxy = &MVPProxy{
+		Type:     "trojan",
+		Server:   "203.0.113.91",
+		Port:     443,
+		Egress:   "a",
+		Password: "trojanpassword",
+		TLS:      &MVPProxyTLS{Enabled: true, ServerName: "trojan.example.com"},
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	generated, report, err := ValidateMVPWithCore(ctx, input, filepath.Join("..", "..", "resources", "core", "sing-box.exe"))
+	if err != nil {
+		t.Fatalf("ValidateMVPWithCore() error: %v", err)
+	}
+	if generated.Model.Route.Final != "proxy" || !report.ModelValid || !report.SchemaValid || !report.SemanticValid || report.Core.SHA256 == "" {
+		t.Fatalf("validation report = %#v", report)
+	}
+	var proxyOutbound *Outbound
+	for i := range generated.Model.Outbounds {
+		if generated.Model.Outbounds[i].Tag == "proxy" {
+			proxyOutbound = &generated.Model.Outbounds[i]
+		}
+	}
+	if proxyOutbound == nil || proxyOutbound.BindInterface != input.InterfaceA.BindInterface {
+		t.Fatalf("proxy outbound bind interface = %#v, expected %s", proxyOutbound, input.InterfaceA.BindInterface)
+	}
+}

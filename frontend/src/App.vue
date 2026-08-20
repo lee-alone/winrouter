@@ -67,7 +67,26 @@ const initializationFailed = ref(false)
 const applicationConfigDirectory = ref('')
 const proxyNodes = ref<nodes.Node[]>([])
 const proxyFormOpen = ref(false)
-const proxyForm = ref({ id: '', name: '', type: 'http', server: '', port: 8080, username: '', password: '', clear_password: false })
+const proxyForm = ref({
+  id: '',
+  name: '',
+  type: 'http' as 'http' | 'shadowsocks' | 'vmess' | 'vless' | 'trojan',
+  server: '',
+  port: 8080,
+  egress: 'b' as 'a' | 'b',
+  username: '',
+  password: '',
+  method: 'aes-256-gcm',
+  uuid: '',
+  flow: '',
+  tls_enabled: false,
+  tls_server_name: '',
+  tls_insecure: false,
+  transport_type: 'tcp' as 'tcp' | 'ws',
+  transport_path: '',
+  transport_host: '',
+  clear_secret: false,
+})
 const selectedMode = ref<'direct-split' | 'proxy-split'>('direct-split')
 const defaultOutbound = ref<'a' | 'b'>('b')
 const proxyTests = ref<Record<string, nodes.TestResult>>({})
@@ -131,12 +150,29 @@ const selectedProxyNode = computed(() => proxyNodes.value.find(node => node.sele
 const sortedProxyNodes = computed(() => [...proxyNodes.value].sort((first, second) => {
   if (proxySort.value === 'favorite' && first.favorite !== second.favorite) return first.favorite ? -1 : 1
   if (proxySort.value === 'latency') {
-    const a = proxyTests.value[first.id]?.available ? proxyTests.value[first.id].latency_ms : Number.MAX_SAFE_INTEGER
-    const b = proxyTests.value[second.id]?.available ? proxyTests.value[second.id].latency_ms : Number.MAX_SAFE_INTEGER
+    const aTest = proxyTests.value[first.id]
+    const bTest = proxyTests.value[second.id]
+    const a = aTest?.available ? (aTest.total_ms || aTest.latency_ms) : Number.MAX_SAFE_INTEGER
+    const b = bTest?.available ? (bTest.total_ms || bTest.latency_ms) : Number.MAX_SAFE_INTEGER
     if (a !== b) return a - b
   }
   return first.name.localeCompare(second.name, 'zh-CN')
 }))
+
+function formatErrorCategory(cat?: string) {
+  switch (cat) {
+    case 'dns_failed': return 'DNS 解析失败'
+    case 'egress_unavailable': return '出口网卡不可用'
+    case 'tcp_failed': return 'TCP 连接失败'
+    case 'tls_failed': return 'TLS 握手失败'
+    case 'authentication_failed': return '凭据认证失败'
+    case 'protocol_failed': return '协议通信失败'
+    case 'target_failed': return '测试目标异常'
+    case 'timeout': return '请求超时'
+    case 'core_failed': return '临时核心异常'
+    default: return '测试失败'
+  }
+}
 const proxyRiskMessages = computed(() => {
   const result: string[] = []
   const node = selectedProxyNode.value
@@ -491,12 +527,50 @@ async function updateAutostart() {
 }
 
 function resetProxyForm() {
-  proxyForm.value = { id: '', name: '', type: 'http', server: '', port: 8080, username: '', password: '', clear_password: false }
+  proxyForm.value = {
+    id: '',
+    name: '',
+    type: 'http',
+    server: '',
+    port: 8080,
+    egress: 'b',
+    username: '',
+    password: '',
+    method: 'aes-256-gcm',
+    uuid: '',
+    flow: '',
+    tls_enabled: false,
+    tls_server_name: '',
+    tls_insecure: false,
+    transport_type: 'tcp',
+    transport_path: '',
+    transport_host: '',
+    clear_secret: false,
+  }
   proxyFormOpen.value = false
 }
 
 function editProxyNode(node: nodes.Node) {
-  proxyForm.value = { id: node.id, name: node.name, type: node.type, server: node.server, port: node.port, username: node.username || '', password: '', clear_password: false }
+  proxyForm.value = {
+    id: node.id,
+    name: node.name,
+    type: (node.type as any) || 'http',
+    server: node.server,
+    port: node.port,
+    egress: (node.egress as any) || 'b',
+    username: node.authentication?.username || node.username || '',
+    password: '',
+    method: node.authentication?.method || (node.type === 'shadowsocks' ? node.username : 'aes-256-gcm') || 'aes-256-gcm',
+    uuid: '',
+    flow: node.authentication?.flow || '',
+    tls_enabled: node.tls?.enabled || (node.type === 'trojan'),
+    tls_server_name: node.tls?.server_name || '',
+    tls_insecure: node.tls?.insecure || false,
+    transport_type: (node.transport?.type === 'ws' ? 'ws' : 'tcp'),
+    transport_path: node.transport?.path || '',
+    transport_host: node.transport?.host || '',
+    clear_secret: false,
+  }
   proxyFormOpen.value = true
 }
 
@@ -505,11 +579,41 @@ async function saveProxyNode() {
   notice.value = ''
   busy.value = true
   try {
-    const input = { ...proxyForm.value }
+    const f = proxyForm.value
+    const input: nodes.Input = {
+      id: f.id || undefined,
+      name: f.name,
+      type: f.type,
+      server: f.server,
+      port: f.port,
+      egress: f.egress,
+      clear_secret: f.clear_secret,
+      authentication: {
+        username: f.type === 'http' ? f.username : undefined,
+        password: (f.type === 'http' || f.type === 'shadowsocks' || f.type === 'trojan') ? (f.password || undefined) : undefined,
+        method: f.type === 'shadowsocks' ? f.method : undefined,
+        uuid: (f.type === 'vmess' || f.type === 'vless') ? (f.uuid || undefined) : undefined,
+        flow: f.type === 'vless' ? (f.flow || undefined) : undefined,
+      },
+      tls: (f.type === 'trojan' || f.tls_enabled) ? {
+        enabled: true,
+        server_name: f.tls_server_name || undefined,
+        insecure: f.tls_insecure,
+      } : undefined,
+      transport: f.transport_type === 'ws' ? {
+        type: 'ws',
+        path: f.transport_path || undefined,
+        host: f.transport_host || undefined,
+      } : undefined,
+    }
+    if (isRunning.value) {
+      error.value = '核心运行中，禁止修改或添加节点；请先停止核心。'
+      return
+    }
     if (input.id) await UpdateProxyNode(input)
     else await AddProxyNode(input)
     proxyNodes.value = await ListProxyNodes()
-    notice.value = input.id ? '代理节点已更新，未填写新密码时保留原密码。' : '代理节点已添加并安全保存。'
+    notice.value = input.id ? '代理节点已更新，未填写新凭据时保留原凭据。' : '代理节点已添加并安全保存。'
     resetProxyForm()
   } catch (reason) {
     error.value = `无法保存代理节点：${messageOf(reason)}`
@@ -517,11 +621,19 @@ async function saveProxyNode() {
 }
 
 async function selectProxyNode(id: string) {
+  if (isRunning.value) {
+    error.value = '核心运行中，禁止切换代理节点；请先停止核心。'
+    return
+  }
   try { await SelectProxyNode(id); proxyNodes.value = await ListProxyNodes(); notice.value = '默认代理节点已更新。' }
   catch (reason) { error.value = `无法选择代理节点：${messageOf(reason)}` }
 }
 
 async function deleteProxyNode(node: nodes.Node) {
+  if (isRunning.value) {
+    error.value = '核心运行中，禁止删除代理节点；请先停止核心。'
+    return
+  }
   if (!window.confirm(`删除代理节点“${node.name}”？此操作会同时删除其加密凭据。`)) return
   try { await DeleteProxyNode(node.id); proxyNodes.value = await ListProxyNodes(); notice.value = '代理节点及其加密凭据已删除。'; if (proxyForm.value.id === node.id) resetProxyForm() }
   catch (reason) { error.value = `无法删除代理节点：${messageOf(reason)}` }
@@ -1121,24 +1233,129 @@ onBeforeUnmount(() => {
           <small>代理 endpoint 同时使用出口 B 绑定和专用 /32 规则防止再次进入代理。</small>
         </section>
         <section class="proxy-heading">
-          <div><p class="section-kicker">HTTP CONNECT / Shadowsocks</p><h2>出口 B 代理节点</h2><p>节点密码通过当前 Windows 用户的 DPAPI 加密，界面和日志不会读取或显示原文。</p></div>
+          <div><p class="section-kicker">HTTP / Shadowsocks / VMess / VLESS / Trojan</p><h2>代理节点管理</h2><p>节点凭据通过当前 Windows 用户的 DPAPI 加密，界面和日志不会读取或显示原文。</p></div>
           <div class="proxy-heading-actions"><label>排序<select v-model="proxySort"><option value="favorite">收藏优先</option><option value="latency">延迟最低</option><option value="name">名称</option></select></label><button class="secondary" type="button" :disabled="testingAllProxies || !proxyNodes.length" @click="speedTestAllProxies">{{ testingAllProxies ? '测速中' : '全部测速' }}</button><button class="primary" type="button" @click="proxyFormOpen ? resetProxyForm() : proxyFormOpen = true">{{ proxyFormOpen ? '取消编辑' : '添加节点' }}</button></div>
         </section>
         <form v-if="proxyFormOpen" class="proxy-form" @submit.prevent="saveProxyNode">
           <label>节点名称<input v-model.trim="proxyForm.name" required maxlength="80" placeholder="例如：办公代理"></label>
+          <label>协议类型
+            <select v-model="proxyForm.type">
+              <option value="http">HTTP CONNECT</option>
+              <option value="shadowsocks">Shadowsocks</option>
+              <option value="vmess">VMess</option>
+              <option value="vless">VLESS</option>
+              <option value="trojan">Trojan</option>
+            </select>
+          </label>
+          <label>物理出口
+            <select v-model="proxyForm.egress">
+              <option value="b">接口 B（默认）</option>
+              <option value="a">接口 A</option>
+            </select>
+          </label>
           <label>服务器地址<input v-model.trim="proxyForm.server" required placeholder="203.0.113.10 或 proxy.example.com"></label>
           <label>端口<input v-model.number="proxyForm.port" required type="number" min="1" max="65535"></label>
-          <label>用户名<input v-model.trim="proxyForm.username" autocomplete="off" placeholder="可选"></label>
-          <label>密码<input v-model="proxyForm.password" type="password" autocomplete="new-password" :disabled="proxyForm.clear_password" :placeholder="proxyForm.id ? '留空则保留原密码' : '可选'"></label>
-          <label v-if="proxyForm.id" class="clear-secret"><input v-model="proxyForm.clear_password" type="checkbox">清除已保存密码</label>
+
+          <!-- HTTP Fields -->
+          <template v-if="proxyForm.type === 'http'">
+            <label>用户名<input v-model.trim="proxyForm.username" autocomplete="off" placeholder="可选"></label>
+            <label>密码<input v-model="proxyForm.password" type="password" autocomplete="new-password" :disabled="proxyForm.clear_secret" :placeholder="proxyForm.id ? '留空则保留原密码' : '可选'"></label>
+          </template>
+
+          <!-- Shadowsocks Fields -->
+          <template v-else-if="proxyForm.type === 'shadowsocks'">
+            <label>加密方法
+              <select v-model="proxyForm.method" required>
+                <option value="aes-128-gcm">aes-128-gcm</option>
+                <option value="aes-256-gcm">aes-256-gcm</option>
+                <option value="chacha20-ietf-poly1305">chacha20-ietf-poly1305</option>
+                <option value="xchacha20-ietf-poly1305">xchacha20-ietf-poly1305</option>
+              </select>
+            </label>
+            <label>密码<input v-model="proxyForm.password" type="password" autocomplete="new-password" :required="!proxyForm.id" :disabled="proxyForm.clear_secret" :placeholder="proxyForm.id ? '留空则保留原密码' : '必填'"></label>
+          </template>
+
+          <!-- VMess Fields -->
+          <template v-else-if="proxyForm.type === 'vmess'">
+            <label>UUID<input v-model.trim="proxyForm.uuid" autocomplete="off" :required="!proxyForm.id" :disabled="proxyForm.clear_secret" :placeholder="proxyForm.id ? '留空则保留原 UUID' : '例如：a8e678c0-...'"></label>
+          </template>
+
+          <!-- VLESS Fields -->
+          <template v-else-if="proxyForm.type === 'vless'">
+            <label>UUID<input v-model.trim="proxyForm.uuid" autocomplete="off" :required="!proxyForm.id" :disabled="proxyForm.clear_secret" :placeholder="proxyForm.id ? '留空则保留原 UUID' : '例如：a8e678c0-...'"></label>
+            <label>Flow
+              <select v-model="proxyForm.flow">
+                <option value="">无 (none)</option>
+                <option value="xtls-rprx-vision">xtls-rprx-vision</option>
+              </select>
+            </label>
+          </template>
+
+          <!-- Trojan Fields -->
+          <template v-else-if="proxyForm.type === 'trojan'">
+            <label>密码<input v-model="proxyForm.password" type="password" autocomplete="new-password" :required="!proxyForm.id" :disabled="proxyForm.clear_secret" :placeholder="proxyForm.id ? '留空则保留原密码' : '必填'"></label>
+          </template>
+
+          <!-- TLS settings for VMess / VLESS / Trojan -->
+          <template v-if="proxyForm.type === 'vmess' || proxyForm.type === 'vless' || proxyForm.type === 'trojan'">
+            <label v-if="proxyForm.type !== 'trojan'" class="clear-secret">
+              <input v-model="proxyForm.tls_enabled" type="checkbox"> 启用 TLS
+            </label>
+            <template v-if="proxyForm.type === 'trojan' || proxyForm.tls_enabled">
+              <label>TLS Server Name (SNI)<input v-model.trim="proxyForm.tls_server_name" placeholder="留空使用服务器地址"></label>
+              <label class="clear-secret"><input v-model="proxyForm.tls_insecure" type="checkbox"> 允许不安全证书 (Insecure)</label>
+            </template>
+
+            <!-- Transport Settings -->
+            <label>传输协议
+              <select v-model="proxyForm.transport_type">
+                <option value="tcp">TCP</option>
+                <option value="ws">WebSocket (WS)</option>
+              </select>
+            </label>
+            <template v-if="proxyForm.transport_type === 'ws'">
+              <label>WebSocket Path<input v-model.trim="proxyForm.transport_path" placeholder="例如：/ws 或 /chat"></label>
+              <label>WebSocket Host<input v-model.trim="proxyForm.transport_host" placeholder="例如：proxy.example.com"></label>
+            </template>
+          </template>
+
+          <label v-if="proxyForm.id" class="clear-secret"><input v-model="proxyForm.clear_secret" type="checkbox">清除已保存凭据</label>
           <div class="proxy-form-actions"><button class="secondary" type="button" @click="resetProxyForm">取消</button><button class="primary" type="submit" :disabled="busy">{{ busy ? '正在保存' : proxyForm.id ? '保存修改' : '添加节点' }}</button></div>
         </form>
         <section class="proxy-list" aria-label="代理节点列表">
           <div v-if="!proxyNodes.length" class="proxy-empty">尚未添加代理节点。</div>
           <article v-for="node in sortedProxyNodes" :key="node.id" :class="{ selected: node.selected }">
             <div class="proxy-status"><button class="favorite-button" type="button" :class="{ active: node.favorite }" :aria-label="node.favorite ? '取消收藏' : '收藏节点'" :title="node.favorite ? '取消收藏' : '收藏节点'" @click="toggleProxyFavorite(node)">{{ node.favorite ? '★' : '☆' }}</button><span :class="['selection-dot', { active: node.selected }]" aria-hidden="true"></span><div><strong>{{ node.name }}</strong><small>{{ node.type.toUpperCase() }} · {{ node.server }}:{{ node.port }}<template v-if="node.resolved_ip && node.resolved_ip !== node.server"> → {{ node.resolved_ip }}</template></small></div></div>
-            <div class="proxy-meta"><span>出口 B</span><span>{{ node.type === 'shadowsocks' ? `加密 ${node.username}` : (node.username || '无用户名') }}</span><span>{{ node.has_password ? '密码已保护' : '无密码' }}</span><span v-if="proxyTests[node.id]" :class="proxyTests[node.id].available ? 'test-ok' : 'test-failed'">{{ proxyTests[node.id].available ? `可用 · ${proxyTests[node.id].latency_ms} ms` : `不可用 · ${proxyTests[node.id].status || '连接失败'}` }}</span><span v-else>尚未测试</span></div>
-            <div class="proxy-actions"><button class="secondary" type="button" :disabled="testingProxyID === node.id" @click="testProxy(node)">{{ testingProxyID === node.id ? '测试中' : '测试' }}</button><button v-if="!node.selected" class="secondary" type="button" @click="selectProxyNode(node.id)">选择</button><span v-else class="selected-label">当前节点</span><template v-if="!node.subscription_id"><button class="secondary" type="button" @click="editProxyNode(node)">编辑</button><button class="delete-button" type="button" @click="deleteProxyNode(node)">删除</button></template><span v-else class="subscription-badge">订阅节点</span></div>
+            <div class="proxy-meta">
+              <span>{{ node.egress === 'a' ? '出口 A' : '出口 B' }}</span>
+              <span>
+                <template v-if="node.type === 'http'">HTTP CONNECT{{ node.authentication?.username ? ` · ${node.authentication.username}` : '' }}</template>
+                <template v-else-if="node.type === 'shadowsocks'">SS · {{ node.authentication?.method || node.username }}</template>
+                <template v-else-if="node.type === 'vmess'">VMess{{ node.transport?.type === 'ws' ? ' · WS' : '' }}{{ node.tls?.enabled ? ' · TLS' : '' }}</template>
+                <template v-else-if="node.type === 'vless'">VLESS{{ node.authentication?.flow ? ` · ${node.authentication.flow}` : '' }}{{ node.tls?.enabled ? ' · TLS' : '' }}</template>
+                <template v-else-if="node.type === 'trojan'">Trojan{{ node.transport?.type === 'ws' ? ' · WS' : '' }} · TLS</template>
+              </span>
+              <span v-if="proxyTests[node.id]" :class="proxyTests[node.id].available ? 'test-ok' : 'test-failed'">
+                <template v-if="proxyTests[node.id].available">
+                  可用 · {{ proxyTests[node.id].total_ms || proxyTests[node.id].latency_ms }} ms
+                  <small v-if="proxyTests[node.id].tcp_ms"> (TCP {{ proxyTests[node.id].tcp_ms }}ms / 协议 {{ proxyTests[node.id].protocol_ms }}ms)</small>
+                </template>
+                <template v-else>
+                  不可用 · {{ formatErrorCategory(proxyTests[node.id].error_category) }}
+                </template>
+              </span>
+              <span v-else>尚未测试</span>
+            </div>
+            <div class="proxy-actions">
+              <button class="secondary" type="button" :disabled="testingProxyID === node.id" @click="testProxy(node)">{{ testingProxyID === node.id ? '测试中' : '测试' }}</button>
+              <button v-if="!node.selected" class="secondary" type="button" :disabled="isRunning" :title="isRunning ? '核心运行中，禁止切换节点' : '选择此节点'" @click="selectProxyNode(node.id)">选择</button>
+              <span v-else class="selected-label">当前节点</span>
+              <template v-if="!node.subscription_id">
+                <button class="secondary" type="button" :disabled="isRunning" :title="isRunning ? '核心运行中，禁止修改节点' : '编辑节点'" @click="editProxyNode(node)">编辑</button>
+                <button class="delete-button" type="button" :disabled="isRunning" :title="isRunning ? '核心运行中，禁止删除节点' : '删除节点'" @click="deleteProxyNode(node)">删除</button>
+              </template>
+              <span v-else class="subscription-badge">订阅节点</span>
+            </div>
           </article>
         </section>
         <section class="subscription-heading"><div><p class="section-kicker">受限 JSON</p><h2>节点订阅</h2><p>公网地址强制 HTTPS；私网或回环 IP 可使用 HTTP。不执行脚本或命令，失败时保留上一批节点。</p></div><button class="secondary" type="button" @click="subscriptionFormOpen ? resetSubscriptionForm() : subscriptionFormOpen = true">{{ subscriptionFormOpen ? '取消' : '添加订阅' }}</button></section>

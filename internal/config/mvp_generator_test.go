@@ -376,6 +376,96 @@ func TestGenerateProxySplitIncludesShadowsocksMethod(t *testing.T) {
 	t.Fatal("Shadowsocks outbound missing")
 }
 
+func TestGenerateProxySplitEgressA(t *testing.T) {
+	input := fixtureInput(t)
+	input.Mode = ModeProxySplit
+	input.Proxy = &MVPProxy{Type: "http", Server: "203.0.113.10", Port: 8080, Egress: "a"}
+	generated, err := GenerateMVP(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if generated.ProxyBindInterface != input.InterfaceA.BindInterface {
+		t.Fatalf("proxy bind interface = %q, want %q", generated.ProxyBindInterface, input.InterfaceA.BindInterface)
+	}
+	foundEndpointRule := false
+	for _, rule := range generated.Model.Route.Rules {
+		if rule.Outbound == "domestic-direct" && reflect.DeepEqual(rule.IPCIDR, []string{"203.0.113.10/32"}) {
+			foundEndpointRule = true
+		}
+	}
+	if !foundEndpointRule {
+		t.Fatal("proxy egress A endpoint loop-prevention rule missing")
+	}
+}
+
+func TestGenerateVMessAndVLESSAndTrojanOutbounds(t *testing.T) {
+	tests := []struct {
+		name      string
+		proxy     MVPProxy
+		checkType string
+	}{
+		{
+			name: "vmess-ws-tls",
+			proxy: MVPProxy{
+				Type:      "vmess",
+				Server:    "203.0.113.88",
+				Port:      443,
+				UUID:      "a8e678c0-8903-4402-8e99-20aadf1a7cd1",
+				TLS:       &MVPProxyTLS{Enabled: true, ServerName: "proxy.example.com"},
+				Transport: &MVPProxyTransport{Type: "ws", Path: "/chat", Host: "proxy.example.com"},
+			},
+			checkType: "vmess",
+		},
+		{
+			name: "vless-vision",
+			proxy: MVPProxy{
+				Type:   "vless",
+				Server: "203.0.113.89",
+				Port:   443,
+				UUID:   "a8e678c0-8903-4402-8e99-20aadf1a7cd1",
+				Flow:   "xtls-rprx-vision",
+				TLS:    &MVPProxyTLS{Enabled: true, ServerName: "vless.example.com"},
+			},
+			checkType: "vless",
+		},
+		{
+			name: "trojan-tls",
+			proxy: MVPProxy{
+				Type:     "trojan",
+				Server:   "203.0.113.90",
+				Port:     443,
+				Password: "secretpassword",
+				TLS:      &MVPProxyTLS{Enabled: true, ServerName: "trojan.example.com"},
+			},
+			checkType: "trojan",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			input := fixtureInput(t)
+			input.Mode = ModeProxySplit
+			input.Proxy = &tc.proxy
+			generated, err := GenerateMVP(input)
+			if err != nil {
+				t.Fatalf("GenerateMVP failed: %v", err)
+			}
+			found := false
+			for _, outbound := range generated.Model.Outbounds {
+				if outbound.Tag == "proxy" {
+					if outbound.Type != tc.checkType {
+						t.Fatalf("outbound.Type = %q, want %q", outbound.Type, tc.checkType)
+					}
+					found = true
+				}
+			}
+			if !found {
+				t.Fatal("proxy outbound missing")
+			}
+		})
+	}
+}
+
 func TestValidateProxySplitRejectsMissingInvalidProxyAndHybrid(t *testing.T) {
 	base := fixtureInput(t)
 	base.Mode = ModeProxySplit
@@ -386,6 +476,18 @@ func TestValidateProxySplitRejectsMissingInvalidProxyAndHybrid(t *testing.T) {
 		func(value *MVPConfig) { value.Proxy = &MVPProxy{Type: "http", Server: "203.0.113.10"} },
 		func(value *MVPConfig) {
 			value.Proxy = &MVPProxy{Type: "http", Server: "203.0.113.10", Port: 8080, Password: "secret"}
+		},
+		func(value *MVPConfig) {
+			value.Proxy = &MVPProxy{Type: "vmess", Server: "203.0.113.10", Port: 8080} // missing UUID
+		},
+		func(value *MVPConfig) {
+			value.Proxy = &MVPProxy{Type: "vless", Server: "203.0.113.10", Port: 8080} // missing UUID
+		},
+		func(value *MVPConfig) {
+			value.Proxy = &MVPProxy{Type: "trojan", Server: "203.0.113.10", Port: 8080} // missing password
+		},
+		func(value *MVPConfig) {
+			value.Proxy = &MVPProxy{Type: "http", Server: "203.0.113.10", Port: 8080, Egress: "c"} // invalid egress
 		},
 	}
 	for index, mutate := range tests {

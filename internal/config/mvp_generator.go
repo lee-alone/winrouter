@@ -47,8 +47,13 @@ func ValidateMVPModel(input MVPConfig) error {
 		if input.Proxy == nil {
 			return fmt.Errorf("proxy-split requires a proxy")
 		}
-		if input.Proxy.Type != "http" && input.Proxy.Type != "shadowsocks" {
+		switch input.Proxy.Type {
+		case "http", "shadowsocks", "vmess", "vless", "trojan":
+		default:
 			return fmt.Errorf("unsupported proxy type %q", input.Proxy.Type)
+		}
+		if input.Proxy.Egress != "" && input.Proxy.Egress != "a" && input.Proxy.Egress != "b" {
+			return fmt.Errorf("unsupported proxy egress %q", input.Proxy.Egress)
 		}
 		address, err := netip.ParseAddr(input.Proxy.Server)
 		if err != nil || !address.Is4() || address.IsUnspecified() || address.IsLoopback() || address.IsMulticast() {
@@ -62,6 +67,18 @@ func ValidateMVPModel(input MVPConfig) error {
 		}
 		if input.Proxy.Type == "shadowsocks" && (strings.TrimSpace(input.Proxy.Method) == "" || input.Proxy.Password == "") {
 			return fmt.Errorf("Shadowsocks method and password are required")
+		}
+		if input.Proxy.Type == "vmess" && strings.TrimSpace(input.Proxy.UUID) == "" {
+			return fmt.Errorf("VMess UUID is required")
+		}
+		if input.Proxy.Type == "vless" && strings.TrimSpace(input.Proxy.UUID) == "" {
+			return fmt.Errorf("VLESS UUID is required")
+		}
+		if input.Proxy.Type == "trojan" && strings.TrimSpace(input.Proxy.Password) == "" {
+			return fmt.Errorf("Trojan password is required")
+		}
+		if input.Proxy.Transport != nil && input.Proxy.Transport.Type != "tcp" && input.Proxy.Transport.Type != "ws" {
+			return fmt.Errorf("unsupported proxy transport %q", input.Proxy.Transport.Type)
 		}
 	}
 	if strings.TrimSpace(input.InterfaceA.GUID) == "" || strings.TrimSpace(input.InterfaceB.GUID) == "" {
@@ -190,7 +207,51 @@ func GenerateMVP(input MVPConfig) (Generated, error) {
 		finalOutbound = "domestic-direct"
 	}
 	if input.Mode == ModeProxySplit {
-		outbounds = append(outbounds, Outbound{Type: input.Proxy.Type, Tag: "proxy", Server: input.Proxy.Server, ServerPort: input.Proxy.Port, BindInterface: input.InterfaceB.BindInterface, Method: input.Proxy.Method, Username: input.Proxy.Username, Password: input.Proxy.Password})
+		proxyBind := input.InterfaceB.BindInterface
+		if input.Proxy.Egress == "a" {
+			proxyBind = input.InterfaceA.BindInterface
+		}
+		proxyOutbound := Outbound{
+			Type:          input.Proxy.Type,
+			Tag:           "proxy",
+			Server:        input.Proxy.Server,
+			ServerPort:    input.Proxy.Port,
+			BindInterface: proxyBind,
+			Method:        input.Proxy.Method,
+			Username:      input.Proxy.Username,
+			Password:      input.Proxy.Password,
+			UUID:          input.Proxy.UUID,
+			Flow:          input.Proxy.Flow,
+			Security:      input.Proxy.Security,
+		}
+		if input.Proxy.TLS != nil && input.Proxy.TLS.Enabled {
+			proxyOutbound.TLS = &TLSConfig{
+				Enabled:    true,
+				ServerName: input.Proxy.TLS.ServerName,
+				Insecure:   input.Proxy.TLS.Insecure,
+				ALPN:       append([]string(nil), input.Proxy.TLS.ALPN...),
+			}
+		}
+		if input.Proxy.Type == "trojan" && proxyOutbound.TLS == nil {
+			proxyOutbound.TLS = &TLSConfig{
+				Enabled:    true,
+				ServerName: input.Proxy.Server,
+			}
+		}
+		if input.Proxy.Transport != nil {
+			var headers map[string][]string
+			if input.Proxy.Transport.Host != "" {
+				headers = map[string][]string{
+					"Host": {input.Proxy.Transport.Host},
+				}
+			}
+			proxyOutbound.Transport = &TransportConfig{
+				Type:    input.Proxy.Transport.Type,
+				Path:    input.Proxy.Transport.Path,
+				Headers: headers,
+			}
+		}
+		outbounds = append(outbounds, proxyOutbound)
 		finalOutbound = "proxy"
 	}
 	bindings := make(map[string]string)
@@ -212,10 +273,16 @@ func GenerateMVP(input MVPConfig) (Generated, error) {
 		}
 		policyPrefixes = append(policyPrefixes, policy.DirectPrefix{Prefix: direct.Prefix, Outbound: tag})
 	}
+	infrastructureA := []string(nil)
 	infrastructureB := []string(nil)
 	if input.Mode == ModeProxySplit {
 		proxyAddress := netip.MustParseAddr(input.Proxy.Server)
-		infrastructureB = []string{netip.PrefixFrom(proxyAddress, proxyAddress.BitLen()).String()}
+		proxyPrefix := netip.PrefixFrom(proxyAddress, proxyAddress.BitLen()).String()
+		if input.Proxy.Egress == "a" {
+			infrastructureA = []string{proxyPrefix}
+		} else {
+			infrastructureB = []string{proxyPrefix}
+		}
 	}
 	customRules := make([]policy.CustomRule, 0, len(input.CustomRules))
 	for index, custom := range input.CustomRules {
@@ -238,6 +305,7 @@ func GenerateMVP(input MVPConfig) (Generated, error) {
 	}
 	rules, err := policy.BuildDirectSplit(policy.Request{
 		DNSUpstreamA: input.DNS.Domestic.Server, DNSUpstreamB: input.DNS.Global.Server,
+		InfrastructureA: infrastructureA,
 		InfrastructureB: infrastructureB,
 		DirectPrefixes:  policyPrefixes, DomesticCIDRs: input.Domestic.CIDRs,
 		DomesticDomains: input.Domestic.DomainSuffixes, BlockIPv6: input.IPv6 == IPv6Block,
@@ -407,7 +475,14 @@ func GenerateMVP(input MVPConfig) (Generated, error) {
 	if err != nil {
 		return Generated{}, fmt.Errorf("marshal MVP configuration: %w", err)
 	}
-	generated := Generated{Model: model, JSON: append(data, '\n'), RuleCategories: categories, Mode: input.Mode, ProxyBindInterface: input.InterfaceB.BindInterface}
+	proxyBindInterface := ""
+	if input.Mode == ModeProxySplit {
+		proxyBindInterface = input.InterfaceB.BindInterface
+		if input.Proxy.Egress == "a" {
+			proxyBindInterface = input.InterfaceA.BindInterface
+		}
+	}
+	generated := Generated{Model: model, JSON: append(data, '\n'), RuleCategories: categories, Mode: input.Mode, ProxyBindInterface: proxyBindInterface}
 	if err := ValidateGeneratedSchema(generated.JSON); err != nil {
 		return Generated{}, err
 	}

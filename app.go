@@ -306,6 +306,9 @@ func (a *App) ListProxyNodes() ([]nodes.Node, error) {
 }
 
 func (a *App) AddProxyNode(input nodes.Input) (nodes.Node, error) {
+	if a.isCoreRunning() {
+		return nodes.Node{}, errors.New("cannot modify proxy nodes while core is running; please stop the core first")
+	}
 	store, err := a.getNodeStore()
 	if err != nil {
 		return nodes.Node{}, err
@@ -319,6 +322,9 @@ func (a *App) AddProxyNode(input nodes.Input) (nodes.Node, error) {
 }
 
 func (a *App) UpdateProxyNode(input nodes.Input) (nodes.Node, error) {
+	if a.isCoreRunning() {
+		return nodes.Node{}, errors.New("cannot modify proxy nodes while core is running; please stop the core first")
+	}
 	store, err := a.getNodeStore()
 	if err != nil {
 		return nodes.Node{}, err
@@ -331,7 +337,17 @@ func (a *App) UpdateProxyNode(input nodes.Input) (nodes.Node, error) {
 	return result, nil
 }
 
+func (a *App) SaveProxyNode(input nodes.Input) (nodes.Node, error) {
+	if input.ID == "" {
+		return a.AddProxyNode(input)
+	}
+	return a.UpdateProxyNode(input)
+}
+
 func (a *App) DeleteProxyNode(id string) error {
+	if a.isCoreRunning() {
+		return errors.New("cannot delete proxy node while core is running; please stop the core first")
+	}
 	store, err := a.getNodeStore()
 	if err != nil {
 		return err
@@ -344,6 +360,9 @@ func (a *App) DeleteProxyNode(id string) error {
 }
 
 func (a *App) SelectProxyNode(id string) (nodes.Node, error) {
+	if a.isCoreRunning() {
+		return nodes.Node{}, errors.New("cannot switch proxy node while core is running; please stop the core first")
+	}
 	store, err := a.getNodeStore()
 	if err != nil {
 		return nodes.Node{}, err
@@ -404,20 +423,59 @@ func (a *App) TestProxyNode(id, dnsServer string) (nodes.TestResult, error) {
 	if err != nil {
 		return nodes.TestResult{}, err
 	}
-	ctx, cancel := context.WithTimeout(a.ctx, 8*time.Second)
+	ctx, cancel := context.WithTimeout(a.ctx, 10*time.Second)
 	defer cancel()
+	egress := node.Egress
+	if egress == "" {
+		egress = nodes.EgressB
+	}
+	source, bindInterface, ifaceErr := a.interfaceEgressDetails(egress)
+	if ifaceErr != nil {
+		result := nodes.TestResult{
+			NodeID:        node.ID,
+			TestedAt:      time.Now().UTC(),
+			ErrorCategory: nodes.ErrorCategoryEgressDown,
+			Error:         ifaceErr.Error(),
+		}
+		return result, nil
+	}
 	if net.ParseIP(node.Server) == nil {
-		source, sourceErr := a.interfaceBSourceIPv4()
-		if sourceErr != nil {
-			return nodes.TestResult{}, sourceErr
+		if source == "" {
+			result := nodes.TestResult{
+				NodeID:        node.ID,
+				TestedAt:      time.Now().UTC(),
+				ErrorCategory: nodes.ErrorCategoryEgressDown,
+				Error:         fmt.Sprintf("interface %s has no usable IPv4 source address for DNS", strings.ToUpper(egress)),
+			}
+			return result, nil
 		}
 		resolved, resolveErr := nodes.ResolveIPv4(ctx, node.Server, dnsServer, source)
 		if resolveErr != nil {
-			return nodes.TestResult{}, fmt.Errorf("proxy DNS via interface B: %w", resolveErr)
+			result := nodes.TestResult{
+				NodeID:        node.ID,
+				TestedAt:      time.Now().UTC(),
+				ErrorCategory: nodes.ErrorCategoryDNSUnavailable,
+				Error:         fmt.Sprintf("proxy DNS via interface %s: %v", strings.ToUpper(egress), resolveErr),
+			}
+			return result, nil
 		}
 		node.ResolvedIP = resolved
 	}
-	result := nodes.Probe(ctx, node, credentials)
+	corePath, coreErr := locateBundledCore()
+	if node.Type != nodes.TypeHTTP && (coreErr != nil || corePath == "") {
+		result := nodes.TestResult{
+			NodeID:        node.ID,
+			TestedAt:      time.Now().UTC(),
+			ErrorCategory: nodes.ErrorCategoryCoreFailed,
+			Error:         "sing-box core binary is required for non-HTTP protocol testing but not found",
+		}
+		return result, nil
+	}
+	result := nodes.ProbeWithOptions(ctx, node, credentials, nodes.ProbeOptions{
+		CorePath:      corePath,
+		BindInterface: bindInterface,
+		SourceIP:      source,
+	})
 	if result.Available && net.ParseIP(node.Server) == nil && node.ResolvedIP != "" {
 		if _, commitErr := store.CommitResolvedIP(node.ID, node.ResolvedIP); commitErr != nil {
 			return nodes.TestResult{}, commitErr
@@ -427,7 +485,20 @@ func (a *App) TestProxyNode(id, dnsServer string) (nodes.TestResult, error) {
 	if !result.Available {
 		level = observability.LevelWarning
 	}
-	a.observations.Log(level, "proxy", "Proxy node availability tested", "", map[string]any{"node_id": node.ID, "available": result.Available, "latency_ms": result.LatencyMS, "status": result.Status})
+	a.observations.Log(level, "proxy", "Proxy node availability tested", "", map[string]any{
+		"node_id":            node.ID,
+		"type":               node.Type,
+		"egress":             egress,
+		"available":          result.Available,
+		"tcp_reachable":      result.TCPReachable,
+		"protocol_available": result.ProtocolAvailable,
+		"tcp_ms":             result.TCPMS,
+		"protocol_ms":        result.ProtocolMS,
+		"total_ms":           result.TotalMS,
+		"latency_ms":         result.LatencyMS,
+		"status":             result.Status,
+		"error_category":     result.ErrorCategory,
+	})
 	return result, nil
 }
 
@@ -492,57 +563,161 @@ func (a *App) withSelectedProxy(input config.MVPConfig) (config.MVPConfig, error
 	if err != nil {
 		return config.MVPConfig{}, err
 	}
+	egress := node.Egress
+	if egress == "" {
+		egress = nodes.EgressB
+	}
 	server := node.Server
+	var resolved string
 	if net.ParseIP(server) == nil {
-		if input.DNS.Global.Type != "udp" || input.DNS.Global.Port != 53 {
+		dnsServer := input.DNS.Global
+		if egress == nodes.EgressA {
+			dnsServer = input.DNS.Domestic
+		}
+		if dnsServer.Type != "udp" || dnsServer.Port != 53 {
 			return config.MVPConfig{}, errors.New("proxy domain bootstrap currently requires fixed UDP DNS on port 53")
 		}
-		source, sourceErr := a.interfaceBSourceIPv4()
+		var source string
+		var sourceErr error
+		if egress == nodes.EgressA {
+			source, sourceErr = a.interfaceASourceIPv4()
+		} else {
+			source, sourceErr = a.interfaceBSourceIPv4()
+		}
 		if sourceErr != nil {
 			return config.MVPConfig{}, sourceErr
 		}
-		ctx, cancel := context.WithTimeout(a.ctx, 8*time.Second)
-		defer cancel()
-		resolved, resolveErr := nodes.ResolveIPv4(ctx, node.Server, input.DNS.Global.Server, source)
+		dnsCtx, dnsCancel := context.WithTimeout(a.ctx, 8*time.Second)
+		defer dnsCancel()
+		res, resolveErr := nodes.ResolveIPv4(dnsCtx, node.Server, dnsServer.Server, source)
 		if resolveErr != nil {
-			return config.MVPConfig{}, fmt.Errorf("proxy DNS via interface B: %w", resolveErr)
+			return config.MVPConfig{}, fmt.Errorf("proxy DNS via interface %s: %w", strings.ToUpper(egress), resolveErr)
 		}
-		candidate := node
-		candidate.ResolvedIP = resolved
-		probe := nodes.Probe(ctx, candidate, credentials)
-		if !probe.Available {
-			return config.MVPConfig{}, fmt.Errorf("resolved proxy endpoint failed health check: %s", probe.Error)
-		}
+		resolved = res
+		server = resolved
+	}
+
+	// For ALL proxy nodes (both raw IP and resolved domain), perform full protocol-level health check before startup
+	source, bindInterface, ifaceErr := a.interfaceEgressDetails(egress)
+	if ifaceErr != nil {
+		return config.MVPConfig{}, ifaceErr
+	}
+	corePath, coreErr := locateBundledCore()
+	if node.Type != nodes.TypeHTTP && (coreErr != nil || corePath == "") {
+		return config.MVPConfig{}, errors.New("sing-box core binary is required to verify proxy node before startup")
+	}
+
+	candidate := node
+	candidate.ResolvedIP = server
+	probeCtx, probeCancel := context.WithTimeout(a.ctx, 8*time.Second)
+	defer probeCancel()
+
+	probe := nodes.ProbeWithOptions(probeCtx, candidate, credentials, nodes.ProbeOptions{
+		CorePath:      corePath,
+		BindInterface: bindInterface,
+		SourceIP:      source,
+	})
+	if !probe.Available {
+		return config.MVPConfig{}, fmt.Errorf("proxy endpoint failed health check: %s (%s)", probe.Error, probe.ErrorCategory)
+	}
+
+	if resolved != "" {
 		if _, commitErr := store.CommitResolvedIP(node.ID, resolved); commitErr != nil {
 			return config.MVPConfig{}, commitErr
 		}
-		server = resolved
 	}
-	input.Proxy = &config.MVPProxy{Type: node.Type, Server: server, Port: node.Port, Password: credentials.Password}
+
+	var proxyTLS *config.MVPProxyTLS
+	if node.TLS != nil && node.TLS.Enabled {
+		proxyTLS = &config.MVPProxyTLS{
+			Enabled:    true,
+			ServerName: node.TLS.ServerName,
+			Insecure:   node.TLS.Insecure,
+			ALPN:       append([]string(nil), node.TLS.ALPN...),
+		}
+	}
+	var proxyTransport *config.MVPProxyTransport
+	if node.Transport != nil && node.Transport.Type != "" {
+		proxyTransport = &config.MVPProxyTransport{
+			Type: node.Transport.Type,
+			Path: node.Transport.Path,
+			Host: node.Transport.Host,
+		}
+	}
+	input.Proxy = &config.MVPProxy{
+		Type:      node.Type,
+		Server:    server,
+		Port:      node.Port,
+		Egress:    egress,
+		Password:  credentials.Password,
+		UUID:      credentials.UUID,
+		Flow:      credentials.Flow,
+		TLS:       proxyTLS,
+		Transport: proxyTransport,
+	}
 	if node.Type == nodes.TypeShadowsocks {
-		input.Proxy.Method = credentials.Username
+		method := credentials.Method
+		if method == "" {
+			method = credentials.Username
+		}
+		input.Proxy.Method = method
 	} else {
 		input.Proxy.Username = credentials.Username
 	}
 	return input, nil
 }
 
-func (a *App) interfaceBSourceIPv4() (string, error) {
+func (a *App) isCoreRunning() bool {
+	status, err := a.GetCoreStatus()
+	return err == nil && status.State == core.StateRunning
+}
+
+func (a *App) interfaceEgressDetails(egress string) (sourceIP string, bindInterface string, err error) {
 	manager, err := a.getInterfaceManager()
+	if err != nil {
+		return "", "", err
+	}
+	snapshot := manager.Snapshot()
+	var iface interfacemanager.ResolvedSelection
+	if egress == nodes.EgressA {
+		iface = snapshot.InterfaceA
+	} else {
+		iface = snapshot.InterfaceB
+	}
+	if iface.Match == nil {
+		return "", "", fmt.Errorf("interface %s is not resolved", strings.ToUpper(egress))
+	}
+	bindInterface = iface.Match.Adapter.GUID
+	for _, address := range iface.Match.Adapter.Addresses {
+		parsed := net.ParseIP(address.IP)
+		if parsed != nil && parsed.To4() != nil && !parsed.IsLoopback() && !parsed.IsUnspecified() {
+			sourceIP = parsed.String()
+			break
+		}
+	}
+	return sourceIP, bindInterface, nil
+}
+
+func (a *App) interfaceASourceIPv4() (string, error) {
+	source, _, err := a.interfaceEgressDetails(nodes.EgressA)
 	if err != nil {
 		return "", err
 	}
-	snapshot := manager.Snapshot()
-	if snapshot.InterfaceB.Match == nil {
-		return "", errors.New("interface B is not resolved")
+	if source == "" {
+		return "", errors.New("interface A has no usable IPv4 source address")
 	}
-	for _, address := range snapshot.InterfaceB.Match.Adapter.Addresses {
-		parsed := net.ParseIP(address.IP)
-		if parsed != nil && parsed.To4() != nil && !parsed.IsLoopback() && !parsed.IsUnspecified() {
-			return parsed.String(), nil
-		}
+	return source, nil
+}
+
+func (a *App) interfaceBSourceIPv4() (string, error) {
+	source, _, err := a.interfaceEgressDetails(nodes.EgressB)
+	if err != nil {
+		return "", err
 	}
-	return "", errors.New("interface B has no usable IPv4 source address")
+	if source == "" {
+		return "", errors.New("interface B has no usable IPv4 source address")
+	}
+	return source, nil
 }
 
 func (a *App) getNodeStore() (*nodes.Store, error) {
@@ -566,6 +741,9 @@ func (a *App) ListSubscriptions() ([]subscriptions.Subscription, error) {
 }
 
 func (a *App) AddSubscription(input subscriptions.Input) (subscriptions.Subscription, error) {
+	if a.isCoreRunning() {
+		return subscriptions.Subscription{}, errors.New("cannot add subscription while core is running; please stop the core first")
+	}
 	manager, err := a.getSubscriptionManager()
 	if err != nil {
 		return subscriptions.Subscription{}, err
@@ -578,6 +756,9 @@ func (a *App) AddSubscription(input subscriptions.Input) (subscriptions.Subscrip
 }
 
 func (a *App) UpdateSubscription(input subscriptions.Input) (subscriptions.Subscription, error) {
+	if a.isCoreRunning() {
+		return subscriptions.Subscription{}, errors.New("cannot modify subscription while core is running; please stop the core first")
+	}
 	manager, err := a.getSubscriptionManager()
 	if err != nil {
 		return subscriptions.Subscription{}, err
@@ -590,6 +771,9 @@ func (a *App) UpdateSubscription(input subscriptions.Input) (subscriptions.Subsc
 }
 
 func (a *App) DeleteSubscription(id string) error {
+	if a.isCoreRunning() {
+		return errors.New("cannot delete subscription while core is running; please stop the core first")
+	}
 	manager, err := a.getSubscriptionManager()
 	if err != nil {
 		return err
@@ -602,6 +786,9 @@ func (a *App) DeleteSubscription(id string) error {
 }
 
 func (a *App) RefreshSubscription(id string) (subscriptions.Subscription, error) {
+	if a.isCoreRunning() {
+		return subscriptions.Subscription{}, errors.New("cannot refresh subscriptions while core is running; please stop the core first")
+	}
 	manager, err := a.getSubscriptionManager()
 	if err != nil {
 		return subscriptions.Subscription{}, err

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 
 	"winrouter/internal/core"
 )
@@ -87,16 +88,45 @@ func ValidateMVPSemantics(generated Generated) error {
 				proxy = &model.Outbounds[index]
 			}
 		}
-		if proxy == nil || (proxy.Type != "http" && proxy.Type != "shadowsocks") || proxy.BindInterface != generated.ProxyBindInterface || proxy.Server == "" || proxy.ServerPort == 0 {
-			return semanticError("proxy outbound must be complete and bound to interface B")
+		if proxy == nil || proxy.BindInterface != generated.ProxyBindInterface || proxy.Server == "" || proxy.ServerPort == 0 {
+			return semanticError("proxy outbound must be complete and correctly bound")
 		}
-		if proxy.Type == "shadowsocks" && (proxy.Method == "" || proxy.Password == "") {
-			return semanticError("Shadowsocks proxy outbound requires method and password")
+		switch proxy.Type {
+		case "http":
+		case "shadowsocks":
+			if proxy.Method == "" || proxy.Password == "" {
+				return semanticError("Shadowsocks proxy outbound requires method and password")
+			}
+		case "vmess":
+			if proxy.UUID == "" {
+				return semanticError("VMess proxy outbound requires uuid")
+			}
+		case "vless":
+			if proxy.UUID == "" {
+				return semanticError("VLESS proxy outbound requires uuid")
+			}
+		case "trojan":
+			if proxy.Password == "" {
+				return semanticError("Trojan proxy outbound requires password")
+			}
+			if proxy.TLS == nil || !proxy.TLS.Enabled {
+				return semanticError("Trojan proxy outbound requires TLS")
+			}
+		default:
+			return semanticError("unsupported proxy outbound type %q", proxy.Type)
 		}
+
+		expectedDirectOutbound := "foreign-direct"
+		for _, direct := range model.Outbounds {
+			if direct.Tag == "domestic-direct" && strings.EqualFold(direct.BindInterface, proxy.BindInterface) {
+				expectedDirectOutbound = "domestic-direct"
+			}
+		}
+
 		endpoint := proxy.Server + "/32"
 		protected := false
 		for _, rule := range model.Route.Rules {
-			if rule.Outbound != "foreign-direct" {
+			if rule.Outbound != expectedDirectOutbound {
 				continue
 			}
 			for _, prefix := range rule.IPCIDR {
@@ -106,7 +136,7 @@ func ValidateMVPSemantics(generated Generated) error {
 			}
 		}
 		if !protected {
-			return semanticError("proxy endpoint must have an interface B loop-prevention rule")
+			return semanticError("proxy endpoint must have a %s loop-prevention rule", expectedDirectOutbound)
 		}
 	}
 	expectedDNSFinal := "dns-global"

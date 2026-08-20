@@ -67,8 +67,16 @@ type DNSServer struct {
 }
 
 type TLSConfig struct {
-	Enabled    bool   `json:"enabled"`
-	ServerName string `json:"server_name"`
+	Enabled    bool     `json:"enabled"`
+	ServerName string   `json:"server_name,omitempty"`
+	Insecure   bool     `json:"insecure,omitempty"`
+	ALPN       []string `json:"alpn,omitempty"`
+}
+
+type TransportConfig struct {
+	Type    string              `json:"type"`
+	Path    string              `json:"path,omitempty"`
+	Headers map[string][]string `json:"headers,omitempty"`
 }
 
 type LogConfig struct {
@@ -87,15 +95,20 @@ type TUNInbound struct {
 }
 
 type Outbound struct {
-	Type           string `json:"type"`
-	Tag            string `json:"tag"`
-	BindInterface  string `json:"bind_interface,omitempty"`
-	Server         string `json:"server,omitempty"`
-	ServerPort     uint16 `json:"server_port,omitempty"`
-	DomainResolver string `json:"domain_resolver,omitempty"`
-	Method         string `json:"method,omitempty"`
-	Username       string `json:"username,omitempty"`
-	Password       string `json:"password,omitempty"`
+	Type           string           `json:"type"`
+	Tag            string           `json:"tag"`
+	BindInterface  string           `json:"bind_interface,omitempty"`
+	Server         string           `json:"server,omitempty"`
+	ServerPort     uint16           `json:"server_port,omitempty"`
+	DomainResolver string           `json:"domain_resolver,omitempty"`
+	Method         string           `json:"method,omitempty"`
+	Username       string           `json:"username,omitempty"`
+	Password       string           `json:"password,omitempty"`
+	UUID           string           `json:"uuid,omitempty"`
+	Flow           string           `json:"flow,omitempty"`
+	Security       string           `json:"security,omitempty"`
+	TLS            *TLSConfig       `json:"tls,omitempty"`
+	Transport      *TransportConfig `json:"transport,omitempty"`
 }
 
 type RouteConfig struct {

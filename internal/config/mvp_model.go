@@ -43,12 +43,31 @@ type MVPCustomRule struct {
 }
 
 type MVPProxy struct {
-	Type     string `json:"type"`
-	Server   string `json:"server"`
-	Port     uint16 `json:"port"`
-	Method   string `json:"method,omitempty"`
-	Username string `json:"username,omitempty"`
-	Password string `json:"password,omitempty"`
+	Type      string             `json:"type"`
+	Server    string             `json:"server"`
+	Port      uint16             `json:"port"`
+	Egress    string             `json:"egress,omitempty"`
+	Method    string             `json:"method,omitempty"`
+	Username  string             `json:"username,omitempty"`
+	Password  string             `json:"password,omitempty"`
+	UUID      string             `json:"uuid,omitempty"`
+	Flow      string             `json:"flow,omitempty"`
+	Security  string             `json:"security,omitempty"`
+	TLS       *MVPProxyTLS       `json:"tls,omitempty"`
+	Transport *MVPProxyTransport `json:"transport,omitempty"`
+}
+
+type MVPProxyTLS struct {
+	Enabled    bool     `json:"enabled"`
+	ServerName string   `json:"server_name,omitempty"`
+	Insecure   bool     `json:"insecure,omitempty"`
+	ALPN       []string `json:"alpn,omitempty"`
+}
+
+type MVPProxyTransport struct {
+	Type string `json:"type"`
+	Path string `json:"path,omitempty"`
+	Host string `json:"host,omitempty"`
 }
 
 type MVPTUN struct {

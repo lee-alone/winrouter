@@ -954,12 +954,71 @@ export namespace main {
 
 export namespace nodes {
 	
+	export class AuthenticationInput {
+	    username?: string;
+	    password?: string;
+	    uuid?: string;
+	    method?: string;
+	    flow?: string;
+
+	    static createFrom(source: any = {}) {
+	        return new AuthenticationInput(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.username = source["username"];
+	        this.password = source["password"];
+	        this.uuid = source["uuid"];
+	        this.method = source["method"];
+	        this.flow = source["flow"];
+	    }
+	}
+	export class TLSInput {
+	    enabled?: boolean;
+	    server_name?: string;
+	    insecure?: boolean;
+	    alpn?: string[];
+
+	    static createFrom(source: any = {}) {
+	        return new TLSInput(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.enabled = source["enabled"];
+	        this.server_name = source["server_name"];
+	        this.insecure = source["insecure"];
+	        this.alpn = source["alpn"];
+	    }
+	}
+	export class TransportInput {
+	    type?: string;
+	    path?: string;
+	    host?: string;
+
+	    static createFrom(source: any = {}) {
+	        return new TransportInput(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.type = source["type"];
+	        this.path = source["path"];
+	        this.host = source["host"];
+	    }
+	}
 	export class Input {
 	    id?: string;
 	    name: string;
 	    type: string;
 	    server: string;
 	    port: number;
+	    egress?: string;
+	    authentication?: AuthenticationInput;
+	    tls?: TLSInput;
+	    transport?: TransportInput;
+	    clear_secret?: boolean;
 	    username?: string;
 	    password?: string;
 	    clear_password?: boolean;
@@ -975,9 +1034,64 @@ export namespace nodes {
 	        this.type = source["type"];
 	        this.server = source["server"];
 	        this.port = source["port"];
+	        this.egress = source["egress"];
+	        this.authentication = source["authentication"] ? AuthenticationInput.createFrom(source["authentication"]) : undefined;
+	        this.tls = source["tls"] ? TLSInput.createFrom(source["tls"]) : undefined;
+	        this.transport = source["transport"] ? TransportInput.createFrom(source["transport"]) : undefined;
+	        this.clear_secret = source["clear_secret"];
 	        this.username = source["username"];
 	        this.password = source["password"];
 	        this.clear_password = source["clear_password"];
+	    }
+	}
+	export class AuthenticationNode {
+	    username?: string;
+	    method?: string;
+	    flow?: string;
+
+	    static createFrom(source: any = {}) {
+	        return new AuthenticationNode(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.username = source["username"];
+	        this.method = source["method"];
+	        this.flow = source["flow"];
+	    }
+	}
+	export class TLSNode {
+	    enabled: boolean;
+	    server_name?: string;
+	    insecure?: boolean;
+	    alpn?: string[];
+
+	    static createFrom(source: any = {}) {
+	        return new TLSNode(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.enabled = source["enabled"];
+	        this.server_name = source["server_name"];
+	        this.insecure = source["insecure"];
+	        this.alpn = source["alpn"];
+	    }
+	}
+	export class TransportNode {
+	    type?: string;
+	    path?: string;
+	    host?: string;
+
+	    static createFrom(source: any = {}) {
+	        return new TransportNode(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.type = source["type"];
+	        this.path = source["path"];
+	        this.host = source["host"];
 	    }
 	}
 	export class Node {
@@ -987,8 +1101,13 @@ export namespace nodes {
 	    server: string;
 	    resolved_ip?: string;
 	    port: number;
-	    username?: string;
+	    egress: string;
+	    authentication?: AuthenticationNode;
+	    tls?: TLSNode;
+	    transport?: TransportNode;
+	    has_secret: boolean;
 	    has_password: boolean;
+	    username?: string;
 	    selected: boolean;
 	    subscription_id?: string;
 	    favorite: boolean;
@@ -1005,8 +1124,13 @@ export namespace nodes {
 	        this.server = source["server"];
 	        this.resolved_ip = source["resolved_ip"];
 	        this.port = source["port"];
-	        this.username = source["username"];
+	        this.egress = source["egress"];
+	        this.authentication = source["authentication"] ? AuthenticationNode.createFrom(source["authentication"]) : undefined;
+	        this.tls = source["tls"] ? TLSNode.createFrom(source["tls"]) : undefined;
+	        this.transport = source["transport"] ? TransportNode.createFrom(source["transport"]) : undefined;
+	        this.has_secret = source["has_secret"];
 	        this.has_password = source["has_password"];
+	        this.username = source["username"];
 	        this.selected = source["selected"];
 	        this.subscription_id = source["subscription_id"];
 	        this.favorite = source["favorite"];
@@ -1015,8 +1139,14 @@ export namespace nodes {
 	export class TestResult {
 	    node_id: string;
 	    available: boolean;
+	    tcp_reachable?: boolean;
+	    protocol_available?: boolean;
 	    latency_ms: number;
+	    tcp_ms?: number;
+	    protocol_ms?: number;
+	    total_ms?: number;
 	    status?: number;
+	    error_category?: string;
 	    error?: string;
 	    // Go type: time
 	    tested_at: any;
@@ -1029,8 +1159,14 @@ export namespace nodes {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.node_id = source["node_id"];
 	        this.available = source["available"];
+	        this.tcp_reachable = source["tcp_reachable"];
+	        this.protocol_available = source["protocol_available"];
 	        this.latency_ms = source["latency_ms"];
+	        this.tcp_ms = source["tcp_ms"];
+	        this.protocol_ms = source["protocol_ms"];
+	        this.total_ms = source["total_ms"];
 	        this.status = source["status"];
+	        this.error_category = source["error_category"];
 	        this.error = source["error"];
 	        this.tested_at = this.convertValues(source["tested_at"], null);
 	    }

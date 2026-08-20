@@ -27,6 +27,7 @@ type DirectPrefix struct {
 type Request struct {
 	DNSUpstreamA    string
 	DNSUpstreamB    string
+	InfrastructureA []string
 	InfrastructureB []string
 	DirectPrefixes  []DirectPrefix
 	DomesticCIDRs   []string
@@ -90,6 +91,13 @@ func BuildDirectSplit(request Request) ([]Rule, error) {
 		{Category: CategoryInfrastructure, Protocol: "dns", Action: "hijack-dns"},
 		{Category: CategoryInfrastructure, CIDRs: []string{upstreamA}, Action: "route", Outbound: "domestic-direct"},
 		{Category: CategoryInfrastructure, CIDRs: []string{upstreamB}, Action: "route", Outbound: "foreign-direct"},
+	}
+	infrastructureA, err := normalizePrefixes(request.InfrastructureA)
+	if err != nil {
+		return nil, fmt.Errorf("interface A infrastructure: %w", err)
+	}
+	if len(infrastructureA) > 0 {
+		rules = append(rules, Rule{Category: CategoryInfrastructure, CIDRs: infrastructureA, Action: "route", Outbound: "domestic-direct"})
 	}
 	infrastructureB, err := normalizePrefixes(request.InfrastructureB)
 	if err != nil {

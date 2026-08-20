@@ -41,7 +41,20 @@ func New(path string, protector Protector) (*Store, error) {
 	if err := json.Unmarshal(data, &s.state); err != nil {
 		return nil, fmt.Errorf("decode node state: %w", err)
 	}
-	if s.state.SchemaVersion == 1 {
+	if s.state.SchemaVersion < SchemaVersion {
+		for i := range s.state.Nodes {
+			if s.state.Nodes[i].Egress == "" {
+				s.state.Nodes[i].Egress = EgressB
+			}
+			if s.state.Nodes[i].Type == TypeShadowsocks && s.state.Nodes[i].Method == "" && s.state.Nodes[i].Username != "" {
+				s.state.Nodes[i].Method = s.state.Nodes[i].Username
+				s.state.Nodes[i].Username = ""
+			}
+			if s.state.Nodes[i].ProtectedSecret == "" && s.state.Nodes[i].LegacyProtected != "" {
+				s.state.Nodes[i].ProtectedSecret = s.state.Nodes[i].LegacyProtected
+				s.state.Nodes[i].LegacyProtected = ""
+			}
+		}
 		s.state.SchemaVersion = SchemaVersion
 		if err := validateState(s.state); err != nil {
 			return nil, err
@@ -103,7 +116,7 @@ func (s *Store) Update(input Input) (Node, error) {
 	if s.state.Nodes[index].SubscriptionID != "" {
 		return Node{}, errors.New("subscription nodes must be updated through their subscription")
 	}
-	item, err := s.makeStored(input, s.state.Nodes[index].Protected)
+	item, err := s.makeStored(input, s.state.Nodes[index].ProtectedSecret)
 	if err != nil {
 		return Node{}, err
 	}
@@ -204,15 +217,26 @@ func (s *Store) ReplaceSubscription(subscriptionID string, inputs []Input) ([]No
 	if subscriptionID == "" {
 		return nil, errors.New("subscription id is required")
 	}
+
 	favorites := make(map[string]bool)
+	var selectedIdentity string
 	for _, existing := range s.state.Nodes {
-		if existing.SubscriptionID == subscriptionID && existing.Favorite {
-			favorites[nodeIdentity(existing)] = true
+		if existing.SubscriptionID == subscriptionID {
+			identity := s.storedNodeIdentity(existing)
+			if existing.Favorite {
+				favorites[identity] = true
+			}
+			if existing.ID == s.state.SelectedID {
+				selectedIdentity = identity
+			}
 		}
 	}
+
+	var newSelectedID string
 	replacements := make([]storedNode, 0, len(inputs))
 	for _, input := range inputs {
 		input.ID = ""
+		identityKey := inputIdentity(input)
 		item, err := s.makeStored(input, "")
 		if err != nil {
 			return nil, err
@@ -222,9 +246,13 @@ func (s *Store) ReplaceSubscription(subscriptionID string, inputs []Input) ([]No
 			return nil, err
 		}
 		item.SubscriptionID = subscriptionID
-		item.Favorite = favorites[nodeIdentity(item)]
+		item.Favorite = favorites[identityKey]
+		if selectedIdentity != "" && selectedIdentity == identityKey && newSelectedID == "" {
+			newSelectedID = item.ID
+		}
 		replacements = append(replacements, item)
 	}
+
 	next := cloneState(s.state)
 	kept := next.Nodes[:0]
 	selectedRemoved := false
@@ -236,14 +264,22 @@ func (s *Store) ReplaceSubscription(subscriptionID string, inputs []Input) ([]No
 		kept = append(kept, item)
 	}
 	next.Nodes = append(kept, replacements...)
-	if selectedRemoved || next.SelectedID == "" {
-		next.SelectedID = ""
-		if len(replacements) > 0 {
+	if selectedRemoved {
+		if newSelectedID != "" {
+			next.SelectedID = newSelectedID
+		} else if len(replacements) > 0 {
 			next.SelectedID = replacements[0].ID
 		} else if len(next.Nodes) > 0 {
 			next.SelectedID = next.Nodes[0].ID
+		} else {
+			next.SelectedID = ""
+		}
+	} else if next.SelectedID == "" {
+		if len(next.Nodes) > 0 {
+			next.SelectedID = next.Nodes[0].ID
 		}
 	}
+
 	if err := s.save(next); err != nil {
 		return nil, err
 	}
@@ -273,37 +309,154 @@ func (s *Store) Credentials(id string) (Node, Credentials, error) {
 		return Node{}, Credentials{}, fmt.Errorf("node %q not found", id)
 	}
 	item := s.state.Nodes[index]
-	credentials := Credentials{Username: item.Username}
-	if item.Protected != "" {
-		ciphertext, err := base64.StdEncoding.DecodeString(item.Protected)
+	credentials := Credentials{Username: item.Username, Method: item.Method, Flow: item.Flow}
+	if item.ProtectedSecret != "" {
+		ciphertext, err := base64.StdEncoding.DecodeString(item.ProtectedSecret)
 		if err != nil {
-			return Node{}, Credentials{}, errors.New("decode protected node password")
+			return Node{}, Credentials{}, errors.New("decode protected node secret")
 		}
 		plaintext, err := s.protector.Unprotect(ciphertext)
 		if err != nil {
-			return Node{}, Credentials{}, fmt.Errorf("unprotect node password: %w", err)
+			return Node{}, Credentials{}, fmt.Errorf("unprotect node secret: %w", err)
 		}
-		credentials.Password = string(plaintext)
+		var doc secretDocument
+		if err := json.Unmarshal(plaintext, &doc); err == nil && (doc.Password != "" || doc.UUID != "") {
+			credentials.Password = doc.Password
+			credentials.UUID = doc.UUID
+		} else {
+			credentials.Password = string(plaintext)
+		}
 	}
 	return publicNode(item, true), credentials, nil
+}
+
+func validUUID(value string) bool {
+	if len(value) != 36 {
+		return false
+	}
+	for i, c := range value {
+		if i == 8 || i == 13 || i == 18 || i == 23 {
+			if c != '-' {
+				return false
+			}
+		} else if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *Store) makeStored(input Input, existingProtected string) (storedNode, error) {
 	input.Name = strings.TrimSpace(input.Name)
 	input.Type = strings.ToLower(strings.TrimSpace(input.Type))
 	input.Server = strings.TrimSpace(input.Server)
-	input.Username = strings.TrimSpace(input.Username)
-	if input.Name == "" || (input.Type != TypeHTTP && input.Type != TypeShadowsocks) || input.Port == 0 {
-		return storedNode{}, errors.New("node name, supported type, and port are required")
+	input.Egress = strings.ToLower(strings.TrimSpace(input.Egress))
+	if input.Egress == "" {
+		input.Egress = EgressB
 	}
-	if input.Type == TypeShadowsocks {
-		if !supportedShadowsocksMethod(input.Username) {
-			return storedNode{}, fmt.Errorf("unsupported Shadowsocks method %q", input.Username)
+	if input.Egress != EgressA && input.Egress != EgressB {
+		return storedNode{}, errors.New("node egress must be 'a' or 'b'")
+	}
+
+	auth := input.Authentication
+	if auth.Username == "" && input.Username != "" {
+		auth.Username = input.Username
+	}
+	if auth.Password == "" && input.Password != "" {
+		auth.Password = input.Password
+	}
+	if input.Type == TypeShadowsocks && auth.Method == "" && input.Username != "" {
+		auth.Method = input.Username
+	}
+	clearSecret := input.ClearSecret || input.ClearPassword
+
+	if input.Name == "" || input.Port == 0 {
+		return storedNode{}, errors.New("node name and port are required")
+	}
+
+	switch input.Type {
+	case TypeHTTP:
+	case TypeShadowsocks:
+		if !supportedShadowsocksMethod(auth.Method) {
+			return storedNode{}, fmt.Errorf("unsupported Shadowsocks method %q", auth.Method)
 		}
-		if input.Password == "" && existingProtected == "" {
+		if clearSecret {
+			return storedNode{}, errors.New("Shadowsocks nodes must have a password; cannot clear secret")
+		}
+		if auth.Password == "" && existingProtected == "" {
 			return storedNode{}, errors.New("Shadowsocks password is required")
 		}
+	case TypeVMess:
+		if auth.UUID == "" && auth.Password != "" {
+			auth.UUID = auth.Password
+		}
+		if clearSecret {
+			return storedNode{}, errors.New("VMess nodes must have a UUID; cannot clear secret")
+		}
+		if auth.UUID == "" && existingProtected == "" {
+			return storedNode{}, errors.New("VMess UUID is required")
+		}
+		if auth.UUID != "" && !validUUID(auth.UUID) {
+			return storedNode{}, errors.New("VMess UUID must be a valid 36-character UUID")
+		}
+	case TypeVLESS:
+		if auth.UUID == "" && auth.Password != "" {
+			auth.UUID = auth.Password
+		}
+		if clearSecret {
+			return storedNode{}, errors.New("VLESS nodes must have a UUID; cannot clear secret")
+		}
+		if auth.UUID == "" && existingProtected == "" {
+			return storedNode{}, errors.New("VLESS UUID is required")
+		}
+		if auth.UUID != "" && !validUUID(auth.UUID) {
+			return storedNode{}, errors.New("VLESS UUID must be a valid 36-character UUID")
+		}
+		if auth.Flow != "" && auth.Flow != "xtls-rprx-vision" {
+			return storedNode{}, fmt.Errorf("unsupported VLESS flow %q", auth.Flow)
+		}
+	case TypeTrojan:
+		if clearSecret {
+			return storedNode{}, errors.New("Trojan nodes must have a password; cannot clear secret")
+		}
+		if auth.Password == "" && existingProtected == "" {
+			return storedNode{}, errors.New("Trojan password is required")
+		}
+	default:
+		return storedNode{}, fmt.Errorf("unsupported proxy type %q", input.Type)
 	}
+
+	if input.TLS != nil && input.TLS.Enabled {
+		if input.TLS.ServerName != "" {
+			sName := strings.ToLower(strings.TrimSpace(input.TLS.ServerName))
+			if strings.Contains(sName, " ") || len(sName) > 253 {
+				return storedNode{}, errors.New("invalid TLS server_name")
+			}
+		}
+		for _, alpn := range input.TLS.ALPN {
+			if strings.TrimSpace(alpn) == "" || len(alpn) > 32 {
+				return storedNode{}, errors.New("invalid TLS ALPN entry")
+			}
+		}
+	}
+
+	if input.Transport != nil && input.Transport.Type != "" {
+		tType := strings.ToLower(strings.TrimSpace(input.Transport.Type))
+		if tType != "ws" && tType != "tcp" {
+			return storedNode{}, fmt.Errorf("unsupported transport type %q", input.Transport.Type)
+		}
+		if input.Transport.Path != "" {
+			if !strings.HasPrefix(input.Transport.Path, "/") || len(input.Transport.Path) > 2048 {
+				return storedNode{}, errors.New("transport path must start with '/' and be at most 2048 characters")
+			}
+		}
+		if input.Transport.Host != "" {
+			if strings.Contains(input.Transport.Host, " ") || len(input.Transport.Host) > 253 {
+				return storedNode{}, errors.New("invalid transport host header")
+			}
+		}
+	}
+
 	server := strings.ToLower(strings.TrimSuffix(input.Server, "."))
 	address, addressErr := netip.ParseAddr(server)
 	if addressErr == nil {
@@ -314,20 +467,28 @@ func (s *Store) makeStored(input Input, existingProtected string) (storedNode, e
 	} else if !validDNSName(server) {
 		return storedNode{}, errors.New("node server must be a usable IPv4 address or DNS name")
 	}
-	protected := existingProtected
-	if input.ClearPassword && input.Password != "" {
-		return storedNode{}, errors.New("clear_password and password cannot be used together")
+
+	if clearSecret && (auth.Password != "" || auth.UUID != "" || input.Password != "") {
+		return storedNode{}, errors.New("clear_secret and secret cannot be used together")
 	}
-	if input.ClearPassword {
+
+	protected := existingProtected
+	if clearSecret {
 		protected = ""
 	}
-	if input.Password != "" {
-		ciphertext, err := s.protector.Protect([]byte(input.Password))
+	if auth.Password != "" || auth.UUID != "" {
+		doc := secretDocument{Password: auth.Password, UUID: auth.UUID}
+		docBytes, err := json.Marshal(doc)
 		if err != nil {
-			return storedNode{}, fmt.Errorf("protect node password: %w", err)
+			return storedNode{}, fmt.Errorf("marshal node secret: %w", err)
+		}
+		ciphertext, err := s.protector.Protect(docBytes)
+		if err != nil {
+			return storedNode{}, fmt.Errorf("protect node secret: %w", err)
 		}
 		protected = base64.StdEncoding.EncodeToString(ciphertext)
 	}
+
 	resolved := ""
 	if existing := indexByID(s.state.Nodes, strings.TrimSpace(input.ID)); existing >= 0 && strings.EqualFold(s.state.Nodes[existing].Server, server) {
 		resolved = s.state.Nodes[existing].ResolvedIP
@@ -335,7 +496,40 @@ func (s *Store) makeStored(input Input, existingProtected string) (storedNode, e
 	if addressErr == nil {
 		resolved = server
 	}
-	return storedNode{Name: input.Name, Type: input.Type, Server: server, ResolvedIP: resolved, Port: input.Port, Username: input.Username, Protected: protected}, nil
+
+	var tlsNode *TLSNode
+	if input.TLS != nil {
+		tlsNode = &TLSNode{
+			Enabled:    input.TLS.Enabled,
+			ServerName: strings.TrimSpace(input.TLS.ServerName),
+			Insecure:   input.TLS.Insecure,
+			ALPN:       append([]string(nil), input.TLS.ALPN...),
+		}
+	}
+
+	var transportNode *TransportNode
+	if input.Transport != nil {
+		transportNode = &TransportNode{
+			Type: strings.ToLower(strings.TrimSpace(input.Transport.Type)),
+			Path: strings.TrimSpace(input.Transport.Path),
+			Host: strings.TrimSpace(input.Transport.Host),
+		}
+	}
+
+	return storedNode{
+		Name:            input.Name,
+		Type:            input.Type,
+		Server:          server,
+		ResolvedIP:      resolved,
+		Port:            input.Port,
+		Egress:          input.Egress,
+		Username:        strings.TrimSpace(auth.Username),
+		Method:          strings.TrimSpace(auth.Method),
+		Flow:            strings.TrimSpace(auth.Flow),
+		TLS:             tlsNode,
+		Transport:       transportNode,
+		ProtectedSecret: protected,
+	}, nil
 }
 
 func supportedShadowsocksMethod(value string) bool {
@@ -396,6 +590,9 @@ func validateState(value state) error {
 				return fmt.Errorf("stored node %q has invalid resolved IP", item.ID)
 			}
 		}
+		if item.Egress != "" && item.Egress != EgressA && item.Egress != EgressB {
+			return fmt.Errorf("stored node %q has invalid egress %q", item.ID, item.Egress)
+		}
 	}
 	if value.SelectedID != "" {
 		if _, exists := seen[value.SelectedID]; !exists {
@@ -406,11 +603,104 @@ func validateState(value state) error {
 }
 
 func publicNode(item storedNode, selected bool) Node {
-	return Node{ID: item.ID, Name: item.Name, Type: item.Type, Server: item.Server, ResolvedIP: item.ResolvedIP, Port: item.Port, Username: item.Username, HasPassword: item.Protected != "", Selected: selected, SubscriptionID: item.SubscriptionID, Favorite: item.Favorite}
+	egress := item.Egress
+	if egress == "" {
+		egress = EgressB
+	}
+	username := item.Username
+	if username == "" && item.Type == TypeShadowsocks {
+		username = item.Method
+	}
+	return Node{
+		ID:         item.ID,
+		Name:       item.Name,
+		Type:       item.Type,
+		Server:     item.Server,
+		ResolvedIP: item.ResolvedIP,
+		Port:       item.Port,
+		Egress:     egress,
+		Authentication: AuthenticationNode{
+			Username: item.Username,
+			Method:   item.Method,
+			Flow:     item.Flow,
+		},
+		TLS:            item.TLS,
+		Transport:      item.Transport,
+		HasSecret:      item.ProtectedSecret != "",
+		HasPassword:    item.ProtectedSecret != "",
+		Username:       username,
+		Selected:       selected,
+		SubscriptionID: item.SubscriptionID,
+		Favorite:       item.Favorite,
+	}
 }
 
-func nodeIdentity(item storedNode) string {
-	return strings.ToLower(fmt.Sprintf("%s|%s|%d", item.Type, item.Server, item.Port))
+func (s *Store) storedNodeIdentity(item storedNode) string {
+	var secret string
+	if item.ProtectedSecret != "" {
+		if ciphertext, err := base64.StdEncoding.DecodeString(item.ProtectedSecret); err == nil {
+			if plaintext, err := s.protector.Unprotect(ciphertext); err == nil {
+				var doc secretDocument
+				if err := json.Unmarshal(plaintext, &doc); err == nil && (doc.Password != "" || doc.UUID != "") {
+					secret = doc.Password
+					if secret == "" {
+						secret = doc.UUID
+					}
+				} else {
+					secret = string(plaintext)
+				}
+			}
+		}
+	}
+	tlsKey := ""
+	if item.TLS != nil && item.TLS.Enabled {
+		tlsKey = fmt.Sprintf("%t|%s|%t|%s", item.TLS.Enabled, strings.ToLower(item.TLS.ServerName), item.TLS.Insecure, strings.Join(item.TLS.ALPN, ","))
+	}
+	transportKey := ""
+	if item.Transport != nil && item.Transport.Type != "" {
+		transportKey = fmt.Sprintf("%s|%s|%s", strings.ToLower(item.Transport.Type), item.Transport.Path, strings.ToLower(item.Transport.Host))
+	}
+	egress := strings.ToLower(item.Egress)
+	if egress == "" {
+		egress = EgressB
+	}
+	return fmt.Sprintf("%s|%s|%d|%s|%s|%s|%s|%s|%s|%s",
+		strings.ToLower(item.Type), strings.ToLower(item.Server), item.Port, egress,
+		item.Username, strings.ToLower(item.Method), strings.ToLower(item.Flow), secret, tlsKey, transportKey)
+}
+
+func inputIdentity(input Input) string {
+	tlsKey := ""
+	if input.TLS != nil && input.TLS.Enabled {
+		tlsKey = fmt.Sprintf("%t|%s|%t|%s", input.TLS.Enabled, strings.ToLower(input.TLS.ServerName), input.TLS.Insecure, strings.Join(input.TLS.ALPN, ","))
+	}
+	transportKey := ""
+	if input.Transport != nil && input.Transport.Type != "" {
+		transportKey = fmt.Sprintf("%s|%s|%s", strings.ToLower(input.Transport.Type), input.Transport.Path, strings.ToLower(input.Transport.Host))
+	}
+	auth := input.Authentication
+	secret := auth.Password
+	if secret == "" {
+		secret = auth.UUID
+	}
+	if secret == "" {
+		secret = input.Password
+	}
+	method := auth.Method
+	if method == "" && input.Type == TypeShadowsocks {
+		method = input.Username
+	}
+	username := auth.Username
+	if username == "" && input.Type != TypeShadowsocks {
+		username = input.Username
+	}
+	egress := strings.ToLower(input.Egress)
+	if egress == "" {
+		egress = EgressB
+	}
+	return fmt.Sprintf("%s|%s|%d|%s|%s|%s|%s|%s|%s|%s",
+		strings.ToLower(input.Type), strings.ToLower(input.Server), input.Port, egress,
+		username, strings.ToLower(method), strings.ToLower(auth.Flow), secret, tlsKey, transportKey)
 }
 
 func usableIPv4(address netip.Addr) bool {

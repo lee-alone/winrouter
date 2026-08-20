@@ -2,14 +2,10 @@ package subscriptions
 
 import (
 	"bytes"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"net"
-	"net/url"
-	"strconv"
 	"strings"
 
 	"winrouter/internal/nodes"
@@ -17,9 +13,40 @@ import (
 
 func Parse(data []byte) ([]nodes.Input, error) {
 	trimmed := bytes.TrimSpace(data)
-	if len(trimmed) > 0 && trimmed[0] != '{' {
-		return parseEncodedShadowsocks(trimmed)
+	if len(trimmed) == 0 {
+		return nil, errors.New("empty subscription data")
 	}
+
+	// 1. Strict versioned JSON format
+	if trimmed[0] == '{' {
+		return parseVersionedJSON(trimmed)
+	}
+
+	// 2. Clash/Mihomo YAML format
+	if isYAMLSubscription(trimmed) {
+		nodes, err := parseClashYAML(trimmed)
+		if err == nil {
+			return nodes, nil
+		}
+		// If it has explicit "proxies:" keyword and failed parsing, return the YAML error
+		if bytes.Contains(trimmed, []byte("proxies:")) {
+			return nil, err
+		}
+	}
+
+	// 3. Multi-line plain text or Base64 URI list
+	return parseURIsSubscription(trimmed)
+}
+
+func isYAMLSubscription(data []byte) bool {
+	return bytes.Contains(data, []byte("proxies:")) ||
+		bytes.HasPrefix(data, []byte("port:")) ||
+		bytes.HasPrefix(data, []byte("mixed-port:")) ||
+		bytes.HasPrefix(data, []byte("mode:")) ||
+		bytes.HasPrefix(data, []byte("rules:"))
+}
+
+func parseVersionedJSON(data []byte) ([]nodes.Input, error) {
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
 	var value document
@@ -38,97 +65,105 @@ func Parse(data []byte) ([]nodes.Input, error) {
 	}
 	result := make([]nodes.Input, 0, len(value.Nodes))
 	for _, item := range value.Nodes {
-		result = append(result, nodes.Input{Name: item.Name, Type: item.Type, Server: item.Server, Port: item.Port, Username: item.Username, Password: item.Password})
+		result = append(result, nodes.Input{
+			Name:     normalizeName(item.Name, "Node"),
+			Type:     item.Type,
+			Server:   item.Server,
+			Port:     item.Port,
+			Egress:   nodes.EgressB,
+			Username: item.Username,
+			Password: item.Password,
+			Authentication: nodes.AuthenticationInput{
+				Username: item.Username,
+				Password: item.Password,
+				Method:   item.Username,
+			},
+		})
 	}
 	return result, nil
 }
 
-func parseEncodedShadowsocks(data []byte) ([]nodes.Input, error) {
-	decoded, err := decodeBase64(string(data))
-	if err != nil {
-		return nil, errors.New("subscription is neither versioned JSON nor valid Base64")
+func parseURIsSubscription(data []byte) ([]nodes.Input, error) {
+	text := string(data)
+	lines := extractNonEmptyLines(text)
+
+	// Check if the lines directly contain valid proxy URI schemes
+	if hasSupportedURIScheme(lines) {
+		return parseLines(lines)
 	}
-	lines := strings.Fields(string(decoded))
+
+	// Otherwise, try Base64 decoding the whole body
+	decoded, err := decodeBase64(text)
+	if err != nil {
+		return nil, errors.New("subscription is neither versioned JSON nor valid Base64 / URI list")
+	}
+
+	decodedLines := extractNonEmptyLines(string(decoded))
+	if len(decodedLines) == 0 {
+		return nil, errors.New("subscription contains no nodes")
+	}
+	return parseLines(decodedLines)
+}
+
+func extractNonEmptyLines(content string) []string {
+	raw := strings.Split(content, "\n")
+	lines := make([]string, 0, len(raw))
+	for _, line := range raw {
+		trimmed := strings.TrimSpace(line)
+		if trimmed != "" && !strings.HasPrefix(trimmed, "#") && !strings.HasPrefix(trimmed, "//") {
+			lines = append(lines, trimmed)
+		}
+	}
+	return lines
+}
+
+func hasSupportedURIScheme(lines []string) bool {
+	for _, line := range lines {
+		lower := strings.ToLower(line)
+		if strings.HasPrefix(lower, "ss://") ||
+			strings.HasPrefix(lower, "vmess://") ||
+			strings.HasPrefix(lower, "vless://") ||
+			strings.HasPrefix(lower, "trojan://") {
+			return true
+		}
+	}
+	return false
+}
+
+func parseLines(lines []string) ([]nodes.Input, error) {
 	if len(lines) == 0 || len(lines) > 500 {
 		return nil, errors.New("subscription must contain 1 to 500 nodes")
 	}
 	result := make([]nodes.Input, 0, len(lines))
 	for index, line := range lines {
-		item, err := parseShadowsocksURI(line)
+		item, err := parseSingleNodeURI(line)
 		if err != nil {
-			return nil, fmt.Errorf("Shadowsocks node %d: %w", index+1, err)
+			return nil, fmt.Errorf("subscription node %d: %w", index+1, err)
 		}
 		result = append(result, item)
 	}
 	return result, nil
 }
 
-func parseShadowsocksURI(value string) (nodes.Input, error) {
-	if !strings.HasPrefix(strings.ToLower(value), "ss://") {
-		return nodes.Input{}, errors.New("unsupported subscription node protocol")
+func parseSingleNodeURI(line string) (nodes.Input, error) {
+	lower := strings.ToLower(line)
+	switch {
+	case strings.HasPrefix(lower, "ss://"):
+		return parseShadowsocksURI(line)
+	case strings.HasPrefix(lower, "vmess://"):
+		return parseVMessURI(line)
+	case strings.HasPrefix(lower, "vless://"):
+		return parseVLESSURI(line)
+	case strings.HasPrefix(lower, "trojan://"):
+		return parseTrojanURI(line)
+	default:
+		return nodes.Input{}, fmt.Errorf("unsupported protocol scheme in line: %s", truncateString(line, 30))
 	}
-	parsed, err := url.Parse(value)
-	if err != nil {
-		return nodes.Input{}, errors.New("invalid ss URI")
-	}
-	name := strings.TrimSpace(parsed.Fragment)
-	if name == "" {
-		name = "Shadowsocks"
-	}
-	var method, password, host, portText string
-	if parsed.Host != "" {
-		credential, err := decodeBase64(parsed.User.String())
-		if err != nil {
-			return nodes.Input{}, errors.New("invalid encoded method and password")
-		}
-		method, password, err = splitCredential(string(credential))
-		if err != nil {
-			return nodes.Input{}, err
-		}
-		host, portText, err = net.SplitHostPort(parsed.Host)
-		if err != nil {
-			return nodes.Input{}, errors.New("invalid server and port")
-		}
-	} else {
-		payload := strings.TrimPrefix(strings.SplitN(value, "#", 2)[0], "ss://")
-		decoded, err := decodeBase64(payload)
-		if err != nil {
-			return nodes.Input{}, errors.New("invalid legacy ss payload")
-		}
-		credential, endpoint, ok := strings.Cut(string(decoded), "@")
-		if !ok {
-			return nodes.Input{}, errors.New("invalid legacy ss payload")
-		}
-		method, password, err = splitCredential(credential)
-		if err != nil {
-			return nodes.Input{}, err
-		}
-		host, portText, err = net.SplitHostPort(endpoint)
-		if err != nil {
-			return nodes.Input{}, errors.New("invalid server and port")
-		}
-	}
-	port, err := strconv.ParseUint(portText, 10, 16)
-	if err != nil || port == 0 {
-		return nodes.Input{}, errors.New("invalid port")
-	}
-	return nodes.Input{Name: name, Type: nodes.TypeShadowsocks, Server: host, Port: uint16(port), Username: method, Password: password}, nil
 }
 
-func splitCredential(value string) (string, string, error) {
-	method, password, ok := strings.Cut(value, ":")
-	if !ok || strings.TrimSpace(method) == "" || password == "" {
-		return "", "", errors.New("method and password are required")
+func truncateString(s string, max int) string {
+	if len(s) <= max {
+		return s
 	}
-	return strings.ToLower(strings.TrimSpace(method)), password, nil
-}
-
-func decodeBase64(value string) ([]byte, error) {
-	value = strings.TrimSpace(value)
-	for _, encoding := range []*base64.Encoding{base64.StdEncoding, base64.RawStdEncoding, base64.URLEncoding, base64.RawURLEncoding} {
-		if decoded, err := encoding.DecodeString(value); err == nil {
-			return decoded, nil
-		}
-	}
-	return nil, errors.New("invalid Base64")
+	return s[:max] + "..."
 }
