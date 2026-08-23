@@ -551,6 +551,128 @@ func TestProxySemanticsRejectMissingLoopPreventionRule(t *testing.T) {
 	}
 }
 
+func TestProxySemanticsWithIPv6Proxy(t *testing.T) {
+	input := fixtureInput(t)
+	input.Mode = ModeProxySplit
+	input.IPv6 = IPv6Split
+	input.Proxy = &MVPProxy{Type: "http", Server: "2001:db8::1", Port: 8080}
+	generated, err := GenerateMVP(input)
+	if err != nil {
+		t.Fatalf("GenerateMVP() error: %v", err)
+	}
+	if err := ValidateMVPSemantics(generated); err != nil {
+		t.Fatalf("ValidateMVPSemantics() error: %v", err)
+	}
+
+	foundLoopRule := false
+	for _, rule := range generated.Model.Route.Rules {
+		if rule.Outbound == "foreign-direct" && len(rule.IPCIDR) == 1 && rule.IPCIDR[0] == "2001:db8::1/128" {
+			foundLoopRule = true
+			break
+		}
+	}
+	if !foundLoopRule {
+		t.Fatal("IPv6 proxy loop-prevention rule (/128) not found")
+	}
+}
+
+func TestGenerateMVPWithCustomIPv6TUNPrefix(t *testing.T) {
+	input := fixtureInput(t)
+	input.TUN.IPv6Prefix = "fd00:1234:5678::/126"
+	generated, err := GenerateMVP(input)
+	if err != nil {
+		t.Fatalf("GenerateMVP() error: %v", err)
+	}
+	if len(generated.Model.Inbounds) != 1 || len(generated.Model.Inbounds[0].Address) != 2 {
+		t.Fatalf("Inbound addresses = %#v", generated.Model.Inbounds)
+	}
+	if generated.Model.Inbounds[0].Address[1] != "fd00:1234:5678::1/126" {
+		t.Fatalf("IPv6 TUN address = %q, want fd00:1234:5678::1/126", generated.Model.Inbounds[0].Address[1])
+	}
+}
+
+func TestProxyRejectsPrivateAndULAAddress(t *testing.T) {
+	for _, ip := range []string{"192.168.1.1", "10.0.0.1", "172.16.0.1", "fc00::1", "fd00::1", "fe80::1", "::1", "::"} {
+		input := fixtureInput(t)
+		input.Mode = ModeProxySplit
+		input.Proxy = &MVPProxy{Type: "http", Server: ip, Port: 8080}
+		if err := ValidateMVPModel(input); err == nil {
+			t.Fatalf("ValidateMVPModel() succeeded for private/ULA IP %q, want error", ip)
+		}
+	}
+}
+
+func TestValidateMVPModelRejectsDirectPrefixConflictingWithTUN(t *testing.T) {
+	input := fixtureInput(t)
+	input.IPv6 = IPv6Split
+	input.DirectPrefixes = append(input.DirectPrefixes, MVPDirectPrefix{
+		Prefix: "fdfe:dcba:9876::/126", BindInterface: input.InterfaceA.BindInterface,
+	})
+	if err := ValidateMVPModel(input); err == nil {
+		t.Fatal("expected error when direct prefix overlaps with TUN IPv6 prefix")
+	}
+
+	input2 := fixtureInput(t)
+	input2.DirectPrefixes = append(input2.DirectPrefixes, MVPDirectPrefix{
+		Prefix: "172.19.0.0/30", BindInterface: input2.InterfaceA.BindInterface,
+	})
+	if err := ValidateMVPModel(input2); err == nil {
+		t.Fatal("expected error when direct prefix overlaps with TUN IPv4 prefix")
+	}
+}
+
+func TestGenerateMVPTUNLocalIPv6AddressAndFirstMatchOrder(t *testing.T) {
+	input := fixtureInput(t)
+	input.IPv6 = IPv6Split
+	input.DirectPrefixes = []MVPDirectPrefix{
+		{Prefix: "fd00:1111::/64", BindInterface: input.InterfaceA.BindInterface},
+	}
+	generated, err := GenerateMVP(input)
+	if err != nil {
+		t.Fatalf("GenerateMVP() error: %v", err)
+	}
+
+	// 1. Verify CategoryLocal contains TUN IPv6 interface address
+	foundLocalTUNV6 := false
+	for _, rule := range generated.Model.Route.Rules {
+		if rule.Outbound == "local-direct" {
+			for _, cidr := range rule.IPCIDR {
+				if cidr == "fdfe:dcba:9876::1/128" {
+					foundLocalTUNV6 = true
+				}
+			}
+		}
+	}
+	if !foundLocalTUNV6 {
+		t.Fatal("TUN IPv6 interface address (/128) not found in local-direct rules")
+	}
+
+	// 2. Verify First-match ordering in PreviewMVPRules
+	preview, err := PreviewMVPRules(input)
+	if err != nil {
+		t.Fatalf("PreviewMVPRules() error: %v", err)
+	}
+
+	localPos, directPos, reservedPos := -1, -1, -1
+	for _, p := range preview {
+		if p.Category == "local" {
+			localPos = p.Position
+		}
+		if p.Category == "direct-prefix" {
+			directPos = p.Position
+		}
+		if p.Category == "reserved" {
+			reservedPos = p.Position
+		}
+	}
+	if localPos == -1 || directPos == -1 || reservedPos == -1 {
+		t.Fatalf("missing categories in preview: local=%d, direct=%d, reserved=%d", localPos, directPos, reservedPos)
+	}
+	if !(localPos < directPos && directPos < reservedPos) {
+		t.Fatalf("expected order local < direct-prefix < reserved, got local=%d, direct=%d, reserved=%d", localPos, directPos, reservedPos)
+	}
+}
+
 func fixtureInput(t *testing.T) MVPConfig {
 	t.Helper()
 	data, err := os.ReadFile(filepath.Join("..", "..", "tests", "fixtures", "config", "direct-split.json"))

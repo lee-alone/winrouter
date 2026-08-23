@@ -75,3 +75,56 @@ func TestGetAlwaysReturnsArrayBackedCollections(t *testing.T) {
 		t.Fatalf("empty collections must serialize as arrays: %#v", got)
 	}
 }
+
+func TestNormalizeIPAndCIDRValues(t *testing.T) {
+	tests := []struct {
+		input   string
+		want    string
+		wantErr bool
+	}{
+		{"1.1.1.1", "1.1.1.1/32", false},
+		{"192.168.1.0/24", "192.168.1.0/24", false},
+		{"192.168.1.5/24", "192.168.1.0/24", false},
+		{"2001:db8::1", "2001:db8::1/128", false},
+		{"2001:db8::/32", "2001:db8::/32", false},
+		{"2001:db8:1234::1/64", "2001:db8:1234::/64", false},
+		{"0.0.0.0", "", true},
+		{"::", "", true},
+		{"224.0.0.1", "", true},
+		{"ff02::1", "", true},
+		{"not-an-ip", "", true},
+	}
+	for _, tc := range tests {
+		got, err := normalizeValue("ip", tc.input)
+		if (err != nil) != tc.wantErr {
+			t.Errorf("normalizeValue(ip, %q) err = %v, wantErr = %v", tc.input, err, tc.wantErr)
+			continue
+		}
+		if !tc.wantErr && got != tc.want {
+			t.Errorf("normalizeValue(ip, %q) = %q, want %q", tc.input, got, tc.want)
+		}
+	}
+}
+
+func TestConfigureNormalizesIPv6Rules(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "rules.json")
+	m, err := New(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings := Defaults()
+	settings.Rules = []Rule{
+		{
+			ID: "v6-rule", Name: "IPv6 Rule", Type: "ip",
+			Values: []string{"2001:db8::1", "2001:db8:abcd::1/48"},
+			Action: "b", Enabled: true,
+		},
+	}
+	stored, err := m.Configure(settings)
+	if err != nil {
+		t.Fatalf("Configure() error: %v", err)
+	}
+	if len(stored.Rules[0].Values) != 2 || stored.Rules[0].Values[0] != "2001:db8::1/128" || stored.Rules[0].Values[1] != "2001:db8:abcd::/48" {
+		t.Fatalf("unexpected normalized values: %#v", stored.Rules[0].Values)
+	}
+}

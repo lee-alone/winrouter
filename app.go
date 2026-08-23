@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
@@ -440,16 +441,33 @@ func (a *App) TestProxyNode(id, dnsServer string) (nodes.TestResult, error) {
 		return result, nil
 	}
 	if net.ParseIP(node.Server) == nil {
-		if source == "" {
+		dnsAddr, err := netip.ParseAddr(dnsServer)
+		dnsIs6 := err == nil && dnsAddr.Is6()
+		var dnsSource string
+		var dnsSourceErr error
+		if dnsIs6 {
+			if egress == nodes.EgressA {
+				dnsSource, dnsSourceErr = a.interfaceASourceIPv6()
+			} else {
+				dnsSource, dnsSourceErr = a.interfaceBSourceIPv6()
+			}
+		} else {
+			if egress == nodes.EgressA {
+				dnsSource, dnsSourceErr = a.interfaceASourceIPv4()
+			} else {
+				dnsSource, dnsSourceErr = a.interfaceBSourceIPv4()
+			}
+		}
+		if dnsSourceErr != nil || dnsSource == "" {
 			result := nodes.TestResult{
 				NodeID:        node.ID,
 				TestedAt:      time.Now().UTC(),
 				ErrorCategory: nodes.ErrorCategoryEgressDown,
-				Error:         fmt.Sprintf("interface %s has no usable IPv4 source address for DNS", strings.ToUpper(egress)),
+				Error:         fmt.Sprintf("interface %s has no usable source address for DNS", strings.ToUpper(egress)),
 			}
 			return result, nil
 		}
-		resolved, resolveErr := nodes.ResolveEndpoint(ctx, node.Server, dnsServer, source)
+		resolved, resolveErr := nodes.ResolveEndpoint(ctx, node.Server, dnsServer, dnsSource)
 		if resolveErr != nil {
 			result := nodes.TestResult{
 				NodeID:        node.ID,
@@ -471,10 +489,20 @@ func (a *App) TestProxyNode(id, dnsServer string) (nodes.TestResult, error) {
 		}
 		return result, nil
 	}
+	probeSource := source
+	if parsedServer := net.ParseIP(node.ResolvedIP); parsedServer != nil && parsedServer.To4() == nil {
+		if v6Source, _, v6Err := a.interfaceEgressDetailsIPv6(egress); v6Err == nil && v6Source != "" {
+			probeSource = v6Source
+		}
+	} else if parsedServer := net.ParseIP(node.Server); parsedServer != nil && parsedServer.To4() == nil {
+		if v6Source, _, v6Err := a.interfaceEgressDetailsIPv6(egress); v6Err == nil && v6Source != "" {
+			probeSource = v6Source
+		}
+	}
 	result := nodes.ProbeWithOptions(ctx, node, credentials, nodes.ProbeOptions{
 		CorePath:      corePath,
 		BindInterface: bindInterface,
-		SourceIP:      source,
+		SourceIP:      probeSource,
 	})
 	if result.Available && net.ParseIP(node.Server) == nil && node.ResolvedIP != "" {
 		if _, commitErr := store.CommitResolvedIP(node.ID, node.ResolvedIP); commitErr != nil {
@@ -577,19 +605,31 @@ func (a *App) withSelectedProxy(input config.MVPConfig) (config.MVPConfig, error
 		if dnsServer.Type != "udp" || dnsServer.Port != 53 {
 			return config.MVPConfig{}, errors.New("proxy domain bootstrap currently requires fixed UDP DNS on port 53")
 		}
+		dnsAddr, err := netip.ParseAddr(dnsServer.Server)
+		if err != nil {
+			return config.MVPConfig{}, fmt.Errorf("invalid DNS server address %q: %w", dnsServer.Server, err)
+		}
 		var source string
 		var sourceErr error
-		if egress == nodes.EgressA {
-			source, sourceErr = a.interfaceASourceIPv4()
+		if dnsAddr.Is6() {
+			if egress == nodes.EgressA {
+				source, sourceErr = a.interfaceASourceIPv6()
+			} else {
+				source, sourceErr = a.interfaceBSourceIPv6()
+			}
 		} else {
-			source, sourceErr = a.interfaceBSourceIPv4()
+			if egress == nodes.EgressA {
+				source, sourceErr = a.interfaceASourceIPv4()
+			} else {
+				source, sourceErr = a.interfaceBSourceIPv4()
+			}
 		}
 		if sourceErr != nil {
 			return config.MVPConfig{}, sourceErr
 		}
 		dnsCtx, dnsCancel := context.WithTimeout(a.ctx, 8*time.Second)
 		defer dnsCancel()
-		res, resolveErr := nodes.ResolveIPv4(dnsCtx, node.Server, dnsServer.Server, source)
+		res, resolveErr := nodes.ResolveEndpoint(dnsCtx, node.Server, dnsServer.Server, source)
 		if resolveErr != nil {
 			return config.MVPConfig{}, fmt.Errorf("proxy DNS via interface %s: %w", strings.ToUpper(egress), resolveErr)
 		}
@@ -601,6 +641,11 @@ func (a *App) withSelectedProxy(input config.MVPConfig) (config.MVPConfig, error
 	source, bindInterface, ifaceErr := a.interfaceEgressDetails(egress)
 	if ifaceErr != nil {
 		return config.MVPConfig{}, ifaceErr
+	}
+	if parsedServer := net.ParseIP(server); parsedServer != nil && parsedServer.To4() == nil {
+		if v6Source, _, v6Err := a.interfaceEgressDetailsIPv6(egress); v6Err == nil && v6Source != "" {
+			source = v6Source
+		}
 	}
 	corePath, coreErr := locateBundledCore()
 	if node.Type != nodes.TypeHTTP && (coreErr != nil || corePath == "") {
@@ -701,6 +746,32 @@ func (a *App) interfaceEgressDetails(egress string) (sourceIP string, bindInterf
 	return sourceIP, bindInterface, nil
 }
 
+func (a *App) interfaceEgressDetailsIPv6(egress string) (sourceIP string, bindInterface string, err error) {
+	manager, err := a.getInterfaceManager()
+	if err != nil {
+		return "", "", err
+	}
+	snapshot := manager.Snapshot()
+	var iface interfacemanager.ResolvedSelection
+	if egress == nodes.EgressA {
+		iface = snapshot.InterfaceA
+	} else {
+		iface = snapshot.InterfaceB
+	}
+	if iface.Match == nil {
+		return "", "", fmt.Errorf("interface %s is not resolved", strings.ToUpper(egress))
+	}
+	bindInterface = iface.Match.Adapter.FriendlyName
+	for _, address := range iface.Match.Adapter.Addresses {
+		parsed, parseErr := netip.ParseAddr(address.IP)
+		if parseErr == nil && parsed.Is6() && !parsed.IsUnspecified() && !parsed.IsLoopback() && !parsed.IsLinkLocalUnicast() && !parsed.IsMulticast() {
+			sourceIP = parsed.String()
+			break
+		}
+	}
+	return sourceIP, bindInterface, nil
+}
+
 func (a *App) interfaceASourceIPv4() (string, error) {
 	source, _, err := a.interfaceEgressDetails(nodes.EgressA)
 	if err != nil {
@@ -719,6 +790,28 @@ func (a *App) interfaceBSourceIPv4() (string, error) {
 	}
 	if source == "" {
 		return "", errors.New("interface B has no usable IPv4 source address")
+	}
+	return source, nil
+}
+
+func (a *App) interfaceASourceIPv6() (string, error) {
+	source, _, err := a.interfaceEgressDetailsIPv6(nodes.EgressA)
+	if err != nil {
+		return "", err
+	}
+	if source == "" {
+		return "", errors.New("interface A has no usable IPv6 source address")
+	}
+	return source, nil
+}
+
+func (a *App) interfaceBSourceIPv6() (string, error) {
+	source, _, err := a.interfaceEgressDetailsIPv6(nodes.EgressB)
+	if err != nil {
+		return "", err
+	}
+	if source == "" {
+		return "", errors.New("interface B has no usable IPv6 source address")
 	}
 	return source, nil
 }

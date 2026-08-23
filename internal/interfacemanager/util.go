@@ -17,17 +17,21 @@ func equalGUID(first, second string) bool {
 
 func fingerprint(snapshot Snapshot) [sha256.Size]byte {
 	value := struct {
-		Adapters    []fingerprintAdapter
-		Routes      []routes.Route
-		InterfaceA  fingerprintSelection
-		InterfaceB  fingerprintSelection
-		TUNPrefix   string
-		Diagnostics []Diagnostic
+		Adapters      []fingerprintAdapter
+		Routes        []routes.Route
+		InterfaceA    fingerprintSelection
+		InterfaceB    fingerprintSelection
+		TUNPrefix     string
+		IPv6TUNPrefix string
+		IPv6Policy    string
+		Diagnostics   []Diagnostic
 	}{
-		Adapters:    relevantAdapters(snapshot),
-		InterfaceA:  selectionFingerprint(snapshot.InterfaceA),
-		InterfaceB:  selectionFingerprint(snapshot.InterfaceB),
-		Diagnostics: append([]Diagnostic(nil), snapshot.Diagnostics...),
+		Adapters:      relevantAdapters(snapshot),
+		InterfaceA:    selectionFingerprint(snapshot.InterfaceA),
+		InterfaceB:    selectionFingerprint(snapshot.InterfaceB),
+		IPv6TUNPrefix: snapshot.IPv6TUNPrefix,
+		IPv6Policy:    snapshot.IPv6Policy,
+		Diagnostics:   append([]Diagnostic(nil), snapshot.Diagnostics...),
 	}
 	selected := selectedInterfaceIndexes(snapshot)
 	for _, route := range snapshot.Routes {
@@ -56,6 +60,7 @@ type fingerprintAdapter struct {
 	GUID         string
 	LUID         uint64
 	Index        uint32
+	IPv6Index    uint32
 	FriendlyName string
 	Status       string
 	Kind         interfaces.Kind
@@ -83,7 +88,7 @@ func relevantAdapters(snapshot Snapshot) []fingerprintAdapter {
 			continue
 		}
 		result = append(result, fingerprintAdapter{
-			GUID: adapter.GUID, LUID: adapter.LUID, Index: adapter.Index, FriendlyName: adapter.FriendlyName,
+			GUID: adapter.GUID, LUID: adapter.LUID, Index: adapter.Index, IPv6Index: adapter.IPv6Index, FriendlyName: adapter.FriendlyName,
 			Status: adapter.Status, Kind: adapter.Kind, Candidate: adapter.Candidate,
 			IPv4Metric: adapter.IPv4Metric, IPv6Metric: adapter.IPv6Metric,
 			Addresses: append([]interfaces.Address(nil), adapter.Addresses...),
@@ -128,10 +133,15 @@ func selectedInterfaceGUIDs(snapshot Snapshot) map[string]bool {
 }
 
 func selectedInterfaceIndexes(snapshot Snapshot) map[uint32]bool {
-	result := make(map[uint32]bool, 2)
+	result := make(map[uint32]bool, 4)
 	for _, selection := range []ResolvedSelection{snapshot.InterfaceA, snapshot.InterfaceB} {
 		if selection.Match != nil {
-			result[selection.Match.Adapter.Index] = true
+			if selection.Match.Adapter.Index != 0 {
+				result[selection.Match.Adapter.Index] = true
+			}
+			if selection.Match.Adapter.IPv6Index != 0 {
+				result[selection.Match.Adapter.IPv6Index] = true
+			}
 		}
 	}
 	return result

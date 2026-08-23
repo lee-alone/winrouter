@@ -214,7 +214,16 @@ func (m *Manager) publish(event Event) {
 
 func buildSnapshot(sequence uint64, state State, adapters []interfaces.Adapter, routeTable []routes.Route, pool []string) Snapshot {
 	topology := interfaces.BuildTopology(adapters)
-	snapshot := Snapshot{Sequence: sequence, Adapters: adapters, Routes: routeTable, Candidates: BuildCandidates(adapters), Topology: topology, Diagnostics: make([]Diagnostic, 0)}
+	snapshot := Snapshot{
+		Sequence:      sequence,
+		Adapters:      adapters,
+		Routes:        routeTable,
+		Candidates:    BuildCandidates(adapters),
+		Topology:      topology,
+		IPv6TUNPrefix: state.IPv6TUNPrefix,
+		IPv6Policy:    state.IPv6Policy,
+		Diagnostics:   make([]Diagnostic, 0),
+	}
 	snapshot.InterfaceA = resolveSelection("A", state.InterfaceA, adapters)
 	snapshot.InterfaceB = resolveSelection("B", state.InterfaceB, adapters)
 	if snapshot.InterfaceA.Match != nil && snapshot.InterfaceB.Match != nil && equalGUID(snapshot.InterfaceA.Match.Adapter.GUID, snapshot.InterfaceB.Match.Adapter.GUID) {
@@ -254,6 +263,20 @@ func buildSnapshot(sequence uint64, state State, adapters []interfaces.Adapter, 
 		}
 		snapshot.Diagnostics = append(snapshot.Diagnostics, Diagnostic{Code: code, Severity: severity, Message: err.Error()})
 	}
+	v6PrefixStr := state.IPv6TUNPrefix
+	if v6PrefixStr == "" {
+		v6PrefixStr = "fdfe:dcba:9876::/126"
+	}
+	if v6Candidate, parseErr := netip.ParsePrefix(v6PrefixStr); parseErr == nil {
+		v6Conflicts := tunprefix.ConflictsForPrefix(v6Candidate, adapters, routeTable)
+		if len(v6Conflicts) > 0 {
+			snapshot.Diagnostics = append(snapshot.Diagnostics, Diagnostic{
+				Code:     "tun-ipv6-conflict",
+				Severity: "error",
+				Message:  fmt.Sprintf("IPv6 TUN prefix %s conflicts with existing network (%d conflict(s))", v6PrefixStr, len(v6Conflicts)),
+			})
+		}
+	}
 	return snapshot
 }
 
@@ -277,17 +300,24 @@ func hasIPv4DefaultRoute(routeTable []routes.Route, adapter interfaces.Adapter) 
 
 func hasIPv6DefaultRoute(routeTable []routes.Route, adapter interfaces.Adapter) bool {
 	for _, route := range routeTable {
-		if route.Prefix == "::/0" && route.InterfaceIndex == adapter.Index {
+		if route.Prefix == "::/0" && routeBelongsToIPv6Adapter(route, adapter) {
 			return true
 		}
 	}
 	return false
 }
 
+func routeBelongsToIPv6Adapter(route routes.Route, adapter interfaces.Adapter) bool {
+	if route.InterfaceLUID != 0 && adapter.LUID != 0 {
+		return route.InterfaceLUID == adapter.LUID
+	}
+	return (adapter.IPv6Index != 0 && route.InterfaceIndex == adapter.IPv6Index) || (adapter.Index != 0 && route.InterfaceIndex == adapter.Index)
+}
+
 func hasUsableIPv6(adapter interfaces.Adapter) bool {
 	for _, address := range adapter.Addresses {
 		parsed, err := netip.ParseAddr(address.IP)
-		if err == nil && parsed.Is6() && !parsed.IsUnspecified() && !parsed.IsLoopback() && !parsed.IsLinkLocalUnicast() {
+		if err == nil && parsed.Is6() && !parsed.IsUnspecified() && !parsed.IsLoopback() && !parsed.IsLinkLocalUnicast() && !parsed.IsMulticast() {
 			return true
 		}
 	}

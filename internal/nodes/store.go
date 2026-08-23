@@ -460,12 +460,12 @@ func (s *Store) makeStored(input Input, existingProtected string) (storedNode, e
 	server := strings.ToLower(strings.TrimSuffix(input.Server, "."))
 	address, addressErr := netip.ParseAddr(server)
 	if addressErr == nil {
-		if !usableIPv4(address) {
-			return storedNode{}, errors.New("node server must be a usable IPv4 address or DNS name")
+		if !usableIPv4(address) && !usableIPv6(address) {
+			return storedNode{}, errors.New("node server must be a usable fixed IP address or DNS name")
 		}
 		server = address.String()
 	} else if !validDNSName(server) {
-		return storedNode{}, errors.New("node server must be a usable IPv4 address or DNS name")
+		return storedNode{}, errors.New("node server must be a usable fixed IP address or DNS name")
 	}
 
 	if clearSecret && (auth.Password != "" || auth.UUID != "" || input.Password != "") {

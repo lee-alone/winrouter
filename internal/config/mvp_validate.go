@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/netip"
 	"strings"
 
 	"winrouter/internal/core"
@@ -123,7 +124,11 @@ func ValidateMVPSemantics(generated Generated) error {
 			}
 		}
 
-		endpoint := proxy.Server + "/32"
+		proxyAddr, err := netip.ParseAddr(proxy.Server)
+		if err != nil {
+			return semanticError("invalid proxy server address %q", proxy.Server)
+		}
+		endpoint := netip.PrefixFrom(proxyAddr, proxyAddr.BitLen()).String()
 		protected := false
 		for _, rule := range model.Route.Rules {
 			if rule.Outbound != expectedDirectOutbound {

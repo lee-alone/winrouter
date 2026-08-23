@@ -103,3 +103,80 @@ func TestBuildDirectSplitPreservesUserRuleOrderAndValidatesIdentity(t *testing.T
 		}
 	}
 }
+
+func TestBuildDirectSplitWithIPv6UpstreamsAndCustomRules(t *testing.T) {
+	rules, err := BuildDirectSplit(Request{
+		DNSUpstreamA: "2400:3200::1",
+		DNSUpstreamB: "2001:4860:4860::8888",
+		BlockIPv6:    false,
+		CustomRules: []CustomRule{
+			{Type: "ip", Value: "2001:db8::1", Action: "route", Outbound: "a"},
+			{Type: "ip", Value: "2001:db8:1234::/48", Action: "route", Outbound: "b"},
+		},
+		DirectPrefixes: []DirectPrefix{
+			{Prefix: "2400:3200:1000::/64", Outbound: "a"},
+		},
+		DomesticCIDRs: []string{"2400:3200::/32", "1.0.1.0/24"},
+	})
+	if err != nil {
+		t.Fatalf("BuildDirectSplit() error: %v", err)
+	}
+
+	// Verify DNS upstreams converted to /128
+	var upstreamARule, upstreamBRule *Rule
+	for index := range rules {
+		if rules[index].Category == CategoryInfrastructure && len(rules[index].CIDRs) == 1 {
+			if rules[index].CIDRs[0] == "2400:3200::1/128" {
+				upstreamARule = &rules[index]
+			}
+			if rules[index].CIDRs[0] == "2001:4860:4860::8888/128" {
+				upstreamBRule = &rules[index]
+			}
+		}
+	}
+	if upstreamARule == nil || upstreamARule.Outbound != "domestic-direct" {
+		t.Fatalf("upstream A rule = %#v", upstreamARule)
+	}
+	if upstreamBRule == nil || upstreamBRule.Outbound != "foreign-direct" {
+		t.Fatalf("upstream B rule = %#v", upstreamBRule)
+	}
+
+	// Verify reserved category includes IPv6 reserved CIDRs when BlockIPv6 is false
+	var reservedRule *Rule
+	for index := range rules {
+		if rules[index].Category == CategoryReserved {
+			reservedRule = &rules[index]
+			break
+		}
+	}
+	if reservedRule == nil {
+		t.Fatal("reserved rule not found")
+	}
+	hasV6Reserved := false
+	for _, cidr := range reservedRule.CIDRs {
+		if cidr == "fc00::/7" {
+			hasV6Reserved = true
+			break
+		}
+	}
+	if !hasV6Reserved {
+		t.Fatalf("reserved rule does not contain IPv6 reserved CIDRs: %#v", reservedRule.CIDRs)
+	}
+}
+
+func TestNormalizePrefixesMixedIPv4AndIPv6(t *testing.T) {
+	input := []string{"192.168.1.1", "2001:db8::1", "10.0.0.5/24", "2001:db8:abcd::1/48", "192.168.1.1/32"}
+	got, err := normalizePrefixes(input)
+	if err != nil {
+		t.Fatalf("normalizePrefixes() error: %v", err)
+	}
+	want := []string{"10.0.0.0/24", "192.168.1.1/32", "2001:db8::1/128", "2001:db8:abcd::/48"}
+	if len(got) != len(want) {
+		t.Fatalf("normalizePrefixes() = %#v, want %#v", got, want)
+	}
+	for i := range got {
+		if got[i] != want[i] {
+			t.Fatalf("got[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
+}

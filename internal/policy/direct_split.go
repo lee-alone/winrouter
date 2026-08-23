@@ -27,6 +27,7 @@ type DirectPrefix struct {
 type Request struct {
 	DNSUpstreamA    string
 	DNSUpstreamB    string
+	TUNIPv6         string
 	InfrastructureA []string
 	InfrastructureB []string
 	DirectPrefixes  []DirectPrefix
@@ -64,6 +65,10 @@ var reservedCIDRs = []string{
 	"198.18.0.0/15", "198.51.100.0/24", "203.0.113.0/24", "224.0.0.0/4", "240.0.0.0/4",
 }
 
+var reservedIPv6CIDRs = []string{
+	"::/128", "2001:db8::/32", "fc00::/7", "fe80::/10", "ff00::/8",
+}
+
 func BuildDirectSplit(request Request) ([]Rule, error) {
 	upstreamA, err := hostPrefix(request.DNSUpstreamA)
 	if err != nil {
@@ -85,9 +90,15 @@ func BuildDirectSplit(request Request) ([]Rule, error) {
 	if err != nil {
 		return nil, fmt.Errorf("domestic domain: %w", err)
 	}
+	localCIDRs := []string{"127.0.0.0/8", "::1/128"}
+	if request.TUNIPv6 != "" {
+		if tunHost, err := hostPrefix(request.TUNIPv6); err == nil {
+			localCIDRs = append(localCIDRs, tunHost)
+		}
+	}
 	rules := []Rule{
 		{Category: CategoryMetadata, Action: "sniff"},
-		{Category: CategoryLocal, CIDRs: []string{"127.0.0.0/8", "::1/128"}, Action: "route", Outbound: "local-direct"},
+		{Category: CategoryLocal, CIDRs: localCIDRs, Action: "route", Outbound: "local-direct"},
 		{Category: CategoryInfrastructure, Protocol: "dns", Action: "hijack-dns"},
 		{Category: CategoryInfrastructure, CIDRs: []string{upstreamA}, Action: "route", Outbound: "domestic-direct"},
 		{Category: CategoryInfrastructure, CIDRs: []string{upstreamB}, Action: "route", Outbound: "foreign-direct"},
@@ -167,7 +178,11 @@ func BuildDirectSplit(request Request) ([]Rule, error) {
 	for _, prefix := range direct {
 		rules = append(rules, Rule{Category: CategoryDirectPrefix, CIDRs: []string{prefix.Prefix}, Action: "route", Outbound: prefix.Outbound})
 	}
-	rules = append(rules, Rule{Category: CategoryReserved, CIDRs: append([]string(nil), reservedCIDRs...), Action: "reject"})
+	reserved := append([]string(nil), reservedCIDRs...)
+	if !request.BlockIPv6 {
+		reserved = append(reserved, reservedIPv6CIDRs...)
+	}
+	rules = append(rules, Rule{Category: CategoryReserved, CIDRs: reserved, Action: "reject"})
 	if request.BlockIPv6 {
 		rules = append(rules, Rule{Category: CategoryReserved, IPVersion: 6, Action: "reject"})
 	}
@@ -226,11 +241,22 @@ func normalizePrefixes(values []string) ([]string, error) {
 	seen := make(map[string]struct{})
 	result := make([]string, 0, len(values))
 	for _, value := range values {
-		prefix, err := netip.ParsePrefix(value)
-		if err != nil {
+		trimmed := strings.TrimSpace(value)
+		var prefix netip.Prefix
+		if addr, err := netip.ParseAddr(trimmed); err == nil {
+			if addr.IsUnspecified() || addr.IsMulticast() {
+				return nil, fmt.Errorf("invalid prefix %q", value)
+			}
+			prefix = netip.PrefixFrom(addr, addr.BitLen())
+		} else if p, err := netip.ParsePrefix(trimmed); err == nil {
+			if p.Addr().IsUnspecified() || p.Addr().IsMulticast() {
+				return nil, fmt.Errorf("invalid prefix %q", value)
+			}
+			prefix = p.Masked()
+		} else {
 			return nil, fmt.Errorf("invalid prefix %q", value)
 		}
-		key := prefix.Masked().String()
+		key := prefix.String()
 		if _, ok := seen[key]; !ok {
 			seen[key] = struct{}{}
 			result = append(result, key)

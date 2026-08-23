@@ -57,8 +57,8 @@ func ValidateMVPModel(input MVPConfig) error {
 			return fmt.Errorf("unsupported proxy egress %q", input.Proxy.Egress)
 		}
 		address, err := netip.ParseAddr(input.Proxy.Server)
-		if err != nil || !address.Is4() || address.IsUnspecified() || address.IsLoopback() || address.IsMulticast() {
-			return fmt.Errorf("proxy server must be a usable fixed IPv4 address")
+		if err != nil || (!address.Is4() && !address.Is6()) || address.IsUnspecified() || address.IsLoopback() || address.IsLinkLocalUnicast() || address.IsMulticast() || address.IsPrivate() {
+			return fmt.Errorf("proxy server must be a usable fixed IP address")
 		}
 		if input.Proxy.Port == 0 {
 			return fmt.Errorf("proxy port is required")
@@ -95,6 +95,14 @@ func ValidateMVPModel(input MVPConfig) error {
 	if err != nil || !prefix.Addr().Is4() || !prefix.Addr().IsPrivate() || prefix.Bits() != 30 || prefix != prefix.Masked() {
 		return fmt.Errorf("tun.prefix must be a canonical private IPv4 /30")
 	}
+	ipv6TUN := input.TUN.IPv6Prefix
+	if ipv6TUN == "" {
+		ipv6TUN = DefaultIPv6TUNPrefix
+	}
+	v6Prefix, err := netip.ParsePrefix(ipv6TUN)
+	if err != nil || !v6Prefix.Addr().Is6() || !v6Prefix.Addr().IsPrivate() || v6Prefix.Bits() != 126 || v6Prefix != v6Prefix.Masked() {
+		return fmt.Errorf("tun.ipv6_prefix must be a canonical private IPv6 /126")
+	}
 	if input.TUN.Stack != TUNStackSystem && input.TUN.Stack != TUNStackGVisor && input.TUN.Stack != TUNStackMixed {
 		return fmt.Errorf("unsupported TUN stack %q", input.TUN.Stack)
 	}
@@ -119,13 +127,20 @@ func ValidateMVPModel(input MVPConfig) error {
 			return fmt.Errorf("domestic CIDR %q is not public", value)
 		}
 	}
+	tunIPv4 := prefix
 	for _, direct := range input.DirectPrefixes {
 		if strings.TrimSpace(direct.BindInterface) == "" {
 			return fmt.Errorf("direct prefix %q requires bind_interface", direct.Prefix)
 		}
-		prefix, err := netip.ParsePrefix(direct.Prefix)
-		if err != nil || (input.IPv6 == IPv6Block && !prefix.Addr().Is4()) {
+		dp, err := netip.ParsePrefix(direct.Prefix)
+		if err != nil || (input.IPv6 == IPv6Block && !dp.Addr().Is4()) {
 			return fmt.Errorf("direct prefix %q is not allowed by IPv6 policy %q", direct.Prefix, input.IPv6)
+		}
+		if dp.Addr().Is4() && (dp.Overlaps(tunIPv4) || tunIPv4.Overlaps(dp)) {
+			return fmt.Errorf("direct prefix %q conflicts with TUN IPv4 prefix %s", direct.Prefix, input.TUN.Prefix)
+		}
+		if dp.Addr().Is6() && (dp.Overlaps(v6Prefix) || v6Prefix.Overlaps(dp)) {
+			return fmt.Errorf("direct prefix %q conflicts with TUN IPv6 prefix %s", direct.Prefix, ipv6TUN)
 		}
 	}
 	if len(input.CustomRules) > 200 {
@@ -315,8 +330,15 @@ func GenerateMVP(input MVPConfig) (Generated, error) {
 		}
 		customRules = append(customRules, mapped)
 	}
+	ipv6TUN := input.TUN.IPv6Prefix
+	if ipv6TUN == "" {
+		ipv6TUN = DefaultIPv6TUNPrefix
+	}
+	ipv6Prefix := netip.MustParsePrefix(ipv6TUN)
+	ipv6InterfaceAddress := netip.PrefixFrom(ipv6Prefix.Addr().Next(), ipv6Prefix.Bits()).String()
 	rules, err := policy.BuildDirectSplit(policy.Request{
 		DNSUpstreamA: input.DNS.Domestic.Server, DNSUpstreamB: input.DNS.Global.Server,
+		TUNIPv6:         ipv6Prefix.Addr().Next().String(),
 		InfrastructureA: infrastructureA,
 		InfrastructureB: infrastructureB,
 		DirectPrefixes:  policyPrefixes, DomesticCIDRs: input.Domestic.CIDRs,
@@ -397,7 +419,7 @@ func GenerateMVP(input MVPConfig) (Generated, error) {
 			Rules:   dnsRules,
 			Final:   finalDNS, Strategy: dnsStrategy(input.IPv6), IndependentCache: true,
 		},
-		Inbounds:  []TUNInbound{{Type: "tun", Tag: "tun-in", InterfaceName: "WinRouter-TUN", Address: []string{netip.PrefixFrom(interfacePrefix.Addr().Next(), 30).String(), "fdfe:dcba:9876::1/126"}, AutoRoute: true, StrictRoute: true, Stack: input.TUN.Stack}},
+		Inbounds:  []TUNInbound{{Type: "tun", Tag: "tun-in", InterfaceName: "WinRouter-TUN", Address: []string{netip.PrefixFrom(interfacePrefix.Addr().Next(), 30).String(), ipv6InterfaceAddress}, AutoRoute: true, StrictRoute: true, Stack: input.TUN.Stack}},
 		Outbounds: outbounds,
 		Route:     RouteConfig{AutoDetectInterface: false, DefaultDNSResolver: finalDNS, RuleSets: routeRuleSets, Rules: make([]RouteRule, 0, len(rules)+len(input.RuleSets)), Final: finalOutbound},
 	}

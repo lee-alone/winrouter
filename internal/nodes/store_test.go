@@ -354,3 +354,15 @@ func TestDPAPIRoundTrip(t *testing.T) {
 		t.Fatalf("DPAPI round trip = %q, %v", plaintext, err)
 	}
 }
+
+func TestStoreRejectsULAAndPrivateNodeServer(t *testing.T) {
+	store, err := New(filepath.Join(t.TempDir(), "nodes.json"), testProtector{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, ip := range []string{"fc00::1", "fd00::1", "fe80::1", "::", "::1", "0.0.0.0", "127.0.0.1"} {
+		if _, err := store.Add(Input{Name: "Bad-Node", Type: TypeHTTP, Server: ip, Port: 8080}); err == nil {
+			t.Fatalf("store.Add succeeded for invalid/ULA/private IP %q, want error", ip)
+		}
+	}
+}

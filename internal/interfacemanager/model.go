@@ -26,6 +26,7 @@ type State struct {
 	InterfaceA    interfaces.Identity `json:"interface_a"`
 	InterfaceB    interfaces.Identity `json:"interface_b"`
 	TUNPrefix     string              `json:"tun_prefix,omitempty"`
+	IPv6TUNPrefix string              `json:"ipv6_tun_prefix,omitempty"`
 	IPv6Policy    string              `json:"ipv6_policy"`
 }
 
@@ -50,10 +51,12 @@ type Snapshot struct {
 	Adapters    []interfaces.Adapter  `json:"adapters"`
 	Routes      []routes.Route        `json:"routes"`
 	Topology    interfaces.Topology   `json:"topology"`
-	InterfaceA  ResolvedSelection     `json:"interface_a"`
-	InterfaceB  ResolvedSelection     `json:"interface_b"`
-	TUN         *tunprefix.Allocation `json:"tun,omitempty"`
-	Diagnostics []Diagnostic          `json:"diagnostics"`
+	InterfaceA    ResolvedSelection     `json:"interface_a"`
+	InterfaceB    ResolvedSelection     `json:"interface_b"`
+	TUN           *tunprefix.Allocation `json:"tun,omitempty"`
+	IPv6TUNPrefix string                `json:"ipv6_tun_prefix,omitempty"`
+	IPv6Policy    string                `json:"ipv6_policy,omitempty"`
+	Diagnostics   []Diagnostic          `json:"diagnostics"`
 }
 
 type Diagnostic struct {

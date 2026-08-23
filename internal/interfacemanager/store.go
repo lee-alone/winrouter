@@ -61,6 +61,7 @@ func normalizeAndValidateState(state *State) error {
 	state.InterfaceA.GUID = strings.TrimSpace(state.InterfaceA.GUID)
 	state.InterfaceB.GUID = strings.TrimSpace(state.InterfaceB.GUID)
 	state.TUNPrefix = strings.TrimSpace(state.TUNPrefix)
+	state.IPv6TUNPrefix = strings.TrimSpace(state.IPv6TUNPrefix)
 	state.IPv6Policy = strings.TrimSpace(state.IPv6Policy)
 	if state.IPv6Policy == "" {
 		state.IPv6Policy = IPv6PolicyBlock
@@ -72,6 +73,12 @@ func normalizeAndValidateState(state *State) error {
 		prefix, err := netip.ParsePrefix(state.TUNPrefix)
 		if err != nil || !prefix.Addr().Is4() || prefix.Bits() != 30 || prefix != prefix.Masked() {
 			return fmt.Errorf("invalid TUN prefix %q", state.TUNPrefix)
+		}
+	}
+	if state.IPv6TUNPrefix != "" {
+		prefix, err := netip.ParsePrefix(state.IPv6TUNPrefix)
+		if err != nil || !prefix.Addr().Is6() || prefix.Bits() != 126 || prefix != prefix.Masked() {
+			return fmt.Errorf("invalid IPv6 TUN prefix %q", state.IPv6TUNPrefix)
 		}
 	}
 	return nil

@@ -154,6 +154,11 @@ func TestDialerForEndpointDoesNotBindIPv4SourceToIPv6Endpoint(t *testing.T) {
 	if dialer.LocalAddr == nil || dialer.LocalAddr.(*net.TCPAddr).IP.String() != "192.0.2.10" {
 		t.Fatalf("expected IPv4 source binding, got %#v", dialer.LocalAddr)
 	}
+
+	dialer = dialerForEndpoint("2001:db8::10", "2001:db8::1")
+	if dialer.LocalAddr == nil || dialer.LocalAddr.(*net.TCPAddr).IP.String() != "2001:db8::1" {
+		t.Fatalf("expected IPv6 source binding, got %#v", dialer.LocalAddr)
+	}
 }
 
 func TestUsableAddressesRejectUnspecifiedResults(t *testing.T) {
@@ -162,6 +167,78 @@ func TestUsableAddressesRejectUnspecifiedResults(t *testing.T) {
 	}
 	if usableIPv6(netip.MustParseAddr("::")) {
 		t.Fatal(":: must not be treated as a usable IPv6 endpoint")
+	}
+	if usableIPv6(netip.MustParseAddr("fe80::1")) {
+		t.Fatal("fe80::1 must not be treated as a usable IPv6 endpoint")
+	}
+	if usableIPv6(netip.MustParseAddr("ff02::1")) {
+		t.Fatal("ff02::1 must not be treated as a usable IPv6 endpoint")
+	}
+	if usableIPv6(netip.MustParseAddr("fc00::1")) {
+		t.Fatal("fc00::1 (ULA) must not be treated as a usable IPv6 endpoint")
+	}
+	if usableIPv6(netip.MustParseAddr("fd00::1")) {
+		t.Fatal("fd00::1 (ULA) must not be treated as a usable IPv6 endpoint")
+	}
+	if !usableIPv6(netip.MustParseAddr("2001:db8::1")) {
+		t.Fatal("2001:db8::1 must be treated as a usable IPv6 endpoint")
+	}
+}
+
+func TestProbeIPv6HTTPConnect(t *testing.T) {
+	listener, err := net.Listen("tcp", "[::1]:0")
+	if err != nil {
+		t.Skip("IPv6 loopback not supported on this host:", err)
+	}
+	defer listener.Close()
+
+	requestLine := make(chan string, 1)
+	go func() {
+		for {
+			conn, acceptErr := listener.Accept()
+			if acceptErr != nil {
+				return
+			}
+			go func(c net.Conn) {
+				defer c.Close()
+				reader := bufio.NewReader(c)
+				line, rErr := reader.ReadString('\n')
+				if rErr != nil {
+					return
+				}
+				trimmed := strings.TrimSpace(line)
+				if strings.HasPrefix(trimmed, "CONNECT") {
+					select {
+					case requestLine <- trimmed:
+					default:
+					}
+				}
+				_, _ = c.Write([]byte("HTTP/1.1 200 Connection established\r\nContent-Length: 0\r\n\r\n"))
+			}(conn)
+		}
+	}()
+
+	address := listener.Addr().(*net.TCPAddr)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	result := Probe(ctx, Node{
+		ID:     "node-v6",
+		Type:   TypeHTTP,
+		Server: address.IP.String(),
+		Port:   uint16(address.Port),
+	}, Credentials{})
+
+	if !result.Available || !result.TCPReachable || !result.ProtocolAvailable || result.Status != 200 {
+		t.Fatalf("IPv6 probe failed: %#v", result)
+	}
+	select {
+	case line := <-requestLine:
+		if line != "CONNECT 1.1.1.1:443 HTTP/1.1" {
+			t.Fatalf("unexpected request line: %q", line)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for CONNECT line")
 	}
 }
 

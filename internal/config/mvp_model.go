@@ -6,6 +6,8 @@ const (
 	ModeProxySplit  = "proxy-split"
 	IPv6Block       = "block"
 	IPv6Split       = "split"
+
+	DefaultIPv6TUNPrefix = "fdfe:dcba:9876::/126"
 )
 
 type MVPConfig struct {
@@ -71,8 +73,9 @@ type MVPProxyTransport struct {
 }
 
 type MVPTUN struct {
-	Prefix string `json:"prefix"`
-	Stack  string `json:"stack"`
+	Prefix     string `json:"prefix"`
+	IPv6Prefix string `json:"ipv6_prefix,omitempty"`
+	Stack      string `json:"stack"`
 }
 type MVPInterface struct {
 	GUID          string `json:"guid"`

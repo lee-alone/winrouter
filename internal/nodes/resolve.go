@@ -30,12 +30,12 @@ func resolveIP(ctx context.Context, hostname, dnsAddress, sourceAddress, network
 		return "", errors.New("invalid proxy DNS name")
 	}
 	dns, err := netip.ParseAddr(dnsAddress)
-	if err != nil || !dns.Is4() {
-		return "", errors.New("proxy bootstrap DNS must be a fixed IPv4 address")
+	if err != nil || (!dns.Is4() && !dns.Is6()) {
+		return "", errors.New("proxy bootstrap DNS must be a usable fixed IP address")
 	}
 	source, err := netip.ParseAddr(sourceAddress)
-	if err != nil || !usableIPv4(source) {
-		return "", errors.New("interface B requires a usable source IPv4 address")
+	if err != nil || (dns.Is4() && !usableIPv4(source)) || (dns.Is6() && !usableIPv6(source)) {
+		return "", errors.New("interface requires a usable source address matching DNS address family")
 	}
 	resolver := net.Resolver{PreferGo: true, StrictErrors: true, Dial: func(ctx context.Context, _, _ string) (net.Conn, error) {
 		dialer := net.Dialer{LocalAddr: &net.UDPAddr{IP: net.IP(source.AsSlice())}}
@@ -54,5 +54,5 @@ func resolveIP(ctx context.Context, hostname, dnsAddress, sourceAddress, network
 }
 
 func usableIPv6(address netip.Addr) bool {
-	return address.Is6() && !address.IsLoopback() && !address.IsUnspecified() && !address.IsLinkLocalUnicast() && !address.IsPrivate()
+	return address.Is6() && !address.IsLoopback() && !address.IsUnspecified() && !address.IsLinkLocalUnicast() && !address.IsMulticast() && !address.IsPrivate()
 }

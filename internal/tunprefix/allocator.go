@@ -125,6 +125,10 @@ func preferFirst(pool []netip.Prefix, preferred string) []netip.Prefix {
 	return result
 }
 
+func ConflictsForPrefix(candidate netip.Prefix, adapters []interfaces.Adapter, routeTable []routes.Route) []Conflict {
+	return conflictsFor(candidate, adapters, routeTable)
+}
+
 func conflictsFor(candidate netip.Prefix, adapters []interfaces.Adapter, routeTable []routes.Route) []Conflict {
 	result := make([]Conflict, 0)
 	for _, adapter := range adapters {
@@ -135,7 +139,11 @@ func conflictsFor(candidate netip.Prefix, adapters []interfaces.Adapter, routeTa
 			}
 			existing := netip.PrefixFrom(ip, int(address.PrefixLength)).Masked()
 			if overlaps(candidate, existing) {
-				result = append(result, Conflict{Candidate: candidate.String(), ExistingPrefix: existing.String(), Source: ConflictInterface, InterfaceIndex: adapter.Index, InterfaceName: adapter.FriendlyName})
+				ifIndex := adapter.Index
+				if candidate.Addr().Is6() && adapter.IPv6Index != 0 {
+					ifIndex = adapter.IPv6Index
+				}
+				result = append(result, Conflict{Candidate: candidate.String(), ExistingPrefix: existing.String(), Source: ConflictInterface, InterfaceIndex: ifIndex, InterfaceName: adapter.FriendlyName})
 			}
 		}
 	}

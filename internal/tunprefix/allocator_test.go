@@ -45,3 +45,23 @@ func TestAllocateRejectsInvalidPool(t *testing.T) {
 		}
 	}
 }
+
+func TestAllocateIPv6PrefixWithConflict(t *testing.T) {
+	adapters := []interfaces.Adapter{
+		{
+			Index: 5, IPv6Index: 15, FriendlyName: "Ethernet 2",
+			Addresses: []interfaces.Address{{IP: "fdfe:dcba:9876::1", PrefixLength: 126}},
+		},
+	}
+	pool := []string{"fdfe:dcba:9876::/126", "fdfe:dcba:9876::4/126"}
+	allocation, err := Allocate(pool, "fdfe:dcba:9876::/126", adapters, nil)
+	if err != nil {
+		t.Fatalf("Allocate() error: %v", err)
+	}
+	if allocation.Prefix != "fdfe:dcba:9876::4/126" || allocation.Reused {
+		t.Fatalf("allocation = %#v", allocation)
+	}
+	if len(allocation.Conflicts) != 1 || allocation.Conflicts[0].InterfaceIndex != 15 || allocation.Conflicts[0].InterfaceName != "Ethernet 2" {
+		t.Fatalf("conflicts = %#v", allocation.Conflicts)
+	}
+}

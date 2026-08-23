@@ -226,11 +226,19 @@ func normalizeValue(ruleType, raw string) (string, error) {
 			return "", errors.New("invalid domain suffix")
 		}
 	case "ip":
-		prefix, err := netip.ParsePrefix(value)
-		if err != nil {
-			return "", errors.New("invalid IP prefix")
+		if addr, err := netip.ParseAddr(value); err == nil {
+			if addr.IsUnspecified() || addr.IsMulticast() {
+				return "", errors.New("invalid IP or CIDR")
+			}
+			value = netip.PrefixFrom(addr, addr.BitLen()).String()
+		} else if prefix, err := netip.ParsePrefix(value); err == nil {
+			if prefix.Addr().IsUnspecified() || prefix.Addr().IsMulticast() {
+				return "", errors.New("invalid IP or CIDR")
+			}
+			value = prefix.Masked().String()
+		} else {
+			return "", errors.New("invalid IP or CIDR")
 		}
-		value = prefix.Masked().String()
 	case "process-name":
 		value = strings.ToLower(value)
 		if strings.ContainsAny(value, `/\\`) || !strings.HasSuffix(value, ".exe") {
