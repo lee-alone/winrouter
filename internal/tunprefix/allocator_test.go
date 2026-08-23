@@ -2,6 +2,7 @@ package tunprefix
 
 import (
 	"errors"
+	"net/netip"
 	"testing"
 
 	"winrouter/internal/interfaces"
@@ -63,5 +64,33 @@ func TestAllocateIPv6PrefixWithConflict(t *testing.T) {
 	}
 	if len(allocation.Conflicts) != 1 || allocation.Conflicts[0].InterfaceIndex != 15 || allocation.Conflicts[0].InterfaceName != "Ethernet 2" {
 		t.Fatalf("conflicts = %#v", allocation.Conflicts)
+	}
+}
+
+func TestConflictsForPrefixIgnoresSummaryRoutes(t *testing.T) {
+	routeTable := []routes.Route{
+		{Prefix: "0.0.0.0/0", InterfaceIndex: 1},
+		{Prefix: "::/0", InterfaceIndex: 1},
+		{Prefix: "fc00::/7", InterfaceIndex: 1},
+		{Prefix: "10.0.0.0/8", InterfaceIndex: 1},
+		{Prefix: "172.16.0.0/12", InterfaceIndex: 1},
+		{Prefix: "192.168.0.0/16", InterfaceIndex: 1},
+	}
+	v6Candidate, err := netip.ParsePrefix("fdfe:dcba:9876::/126")
+	if err != nil {
+		t.Fatal(err)
+	}
+	conflicts := ConflictsForPrefix(v6Candidate, nil, routeTable)
+	if len(conflicts) != 0 {
+		t.Fatalf("ConflictsForPrefix(v6) = %#v, want 0 conflicts", conflicts)
+	}
+
+	v4Candidate, err := netip.ParsePrefix("172.19.0.0/30")
+	if err != nil {
+		t.Fatal(err)
+	}
+	conflicts = ConflictsForPrefix(v4Candidate, nil, routeTable)
+	if len(conflicts) != 0 {
+		t.Fatalf("ConflictsForPrefix(v4) = %#v, want 0 conflicts", conflicts)
 	}
 }

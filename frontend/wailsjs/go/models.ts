@@ -182,6 +182,7 @@ export namespace config {
 	export class MVPDNS {
 	    domestic: MVPDNSServer;
 	    global: MVPDNSServer;
+	    proxy?: MVPDNSServer;
 	
 	    static createFrom(source: any = {}) {
 	        return new MVPDNS(source);
@@ -191,6 +192,7 @@ export namespace config {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.domestic = this.convertValues(source["domestic"], MVPDNSServer);
 	        this.global = this.convertValues(source["global"], MVPDNSServer);
+	        this.proxy = this.convertValues(source["proxy"], MVPDNSServer);
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -309,7 +311,6 @@ export namespace config {
 	}
 	export class MVPConfig {
 	    schema_version: number;
-	    mode?: string;
 	    tun: MVPTUN;
 	    interface_a: MVPInterface;
 	    interface_b: MVPInterface;
@@ -332,7 +333,6 @@ export namespace config {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.schema_version = source["schema_version"];
-	        this.mode = source["mode"];
 	        this.tun = this.convertValues(source["tun"], MVPTUN);
 	        this.interface_a = this.convertValues(source["interface_a"], MVPInterface);
 	        this.interface_b = this.convertValues(source["interface_b"], MVPInterface);
@@ -478,6 +478,7 @@ export namespace dnssettings {
 	    schema_version: number;
 	    domestic: Server;
 	    global: Server;
+	    proxy?: Server;
 	
 	    static createFrom(source: any = {}) {
 	        return new Settings(source);
@@ -488,6 +489,7 @@ export namespace dnssettings {
 	        this.schema_version = source["schema_version"];
 	        this.domestic = this.convertValues(source["domestic"], Server);
 	        this.global = this.convertValues(source["global"], Server);
+	        this.proxy = this.convertValues(source["proxy"], Server);
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -904,7 +906,6 @@ export namespace main {
 	    name: string;
 	    version: string;
 	    commit: string;
-	    mode: string;
 	    coreVersion: string;
 	    ready: boolean;
 	
@@ -917,7 +918,6 @@ export namespace main {
 	        this.name = source["name"];
 	        this.version = source["version"];
 	        this.commit = source["commit"];
-	        this.mode = source["mode"];
 	        this.coreVersion = source["coreVersion"];
 	        this.ready = source["ready"];
 	    }

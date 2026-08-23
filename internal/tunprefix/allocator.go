@@ -149,7 +149,7 @@ func conflictsFor(candidate netip.Prefix, adapters []interfaces.Adapter, routeTa
 	}
 	for _, route := range routeTable {
 		existing, err := netip.ParsePrefix(route.Prefix)
-		if err != nil || existing.Bits() == 0 || existing.Addr().BitLen() != candidate.Addr().BitLen() {
+		if err != nil || isSummaryRoute(existing.Masked()) || existing.Addr().BitLen() != candidate.Addr().BitLen() {
 			continue
 		}
 		if overlaps(candidate, existing.Masked()) {
@@ -157,6 +157,18 @@ func conflictsFor(candidate netip.Prefix, adapters []interfaces.Adapter, routeTa
 		}
 	}
 	return result
+}
+
+func isSummaryRoute(prefix netip.Prefix) bool {
+	if prefix.Bits() == 0 {
+		return true
+	}
+	for _, block := range privateBlocks {
+		if prefix == block {
+			return true
+		}
+	}
+	return false
 }
 
 func overlaps(a, b netip.Prefix) bool {

@@ -582,4 +582,17 @@ func TestManagerIPv6TUNPrefixConflictDiagnostics(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertDiagnostic(t, snapshot.Diagnostics, "tun-ipv6-conflict")
+
+	// 3. No conflict when route table contains top-level ULA summary route fc00::/7
+	manager.state.IPv6TUNPrefix = ""
+	routeTable = []routes.Route{
+		{Prefix: "fc00::/7", InterfaceIndex: 9},
+		{Prefix: "fd12:ff09:4260::/48", InterfaceIndex: 9},
+	}
+	manager.options.EnumerateRoutes = func() ([]routes.Route, error) { return routeTable, nil }
+	snapshot, err = manager.Refresh()
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertNoDiagnostic(t, snapshot.Diagnostics, "tun-ipv6-conflict")
 }
