@@ -293,6 +293,7 @@ export namespace config {
 	}
 	export class MVPTUN {
 	    prefix: string;
+	    ipv6_prefix?: string;
 	    stack: string;
 	
 	    static createFrom(source: any = {}) {
@@ -302,12 +303,13 @@ export namespace config {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.prefix = source["prefix"];
+	        this.ipv6_prefix = source["ipv6_prefix"];
 	        this.stack = source["stack"];
 	    }
 	}
 	export class MVPConfig {
 	    schema_version: number;
-	    mode: string;
+	    mode?: string;
 	    tun: MVPTUN;
 	    interface_a: MVPInterface;
 	    interface_b: MVPInterface;
@@ -626,6 +628,8 @@ export namespace interfacemanager {
 	    interface_a: ResolvedSelection;
 	    interface_b: ResolvedSelection;
 	    tun?: tunprefix.Allocation;
+	    ipv6_tun_prefix?: string;
+	    ipv6_policy?: string;
 	    diagnostics: Diagnostic[];
 	
 	    static createFrom(source: any = {}) {
@@ -642,6 +646,8 @@ export namespace interfacemanager {
 	        this.interface_a = this.convertValues(source["interface_a"], ResolvedSelection);
 	        this.interface_b = this.convertValues(source["interface_b"], ResolvedSelection);
 	        this.tun = this.convertValues(source["tun"], tunprefix.Allocation);
+	        this.ipv6_tun_prefix = source["ipv6_tun_prefix"];
+	        this.ipv6_policy = source["ipv6_policy"];
 	        this.diagnostics = this.convertValues(source["diagnostics"], Diagnostic);
 	    }
 	

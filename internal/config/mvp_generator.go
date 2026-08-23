@@ -35,19 +35,24 @@ func ValidateMVPModel(input MVPConfig) error {
 	if input.SchemaVersion != SchemaVersion1 {
 		return fmt.Errorf("unsupported schema_version %d", input.SchemaVersion)
 	}
-	if input.Mode != ModeDirectSplit && input.Mode != ModeProxySplit {
-		return fmt.Errorf("unsupported mode %q", input.Mode)
-	}
-	if input.DefaultOutbound != "" && input.DefaultOutbound != "a" && input.DefaultOutbound != "b" {
+	if input.DefaultOutbound != "" && input.DefaultOutbound != "a" && input.DefaultOutbound != "b" && input.DefaultOutbound != "c" {
 		return fmt.Errorf("unsupported default_outbound %q", input.DefaultOutbound)
 	}
-	if input.Mode == ModeDirectSplit && input.Proxy != nil {
-		return fmt.Errorf("direct-split must not define a proxy")
-	}
-	if input.Mode == ModeProxySplit {
-		if input.Proxy == nil {
-			return fmt.Errorf("proxy-split requires a proxy")
+	requiresProxy := input.DefaultOutbound == "c"
+	for _, ruleSet := range input.RuleSets {
+		if ruleSet.Action == "c" {
+			requiresProxy = true
 		}
+	}
+	for _, custom := range input.CustomRules {
+		if custom.Action == "c" {
+			requiresProxy = true
+		}
+	}
+	if requiresProxy && input.Proxy == nil {
+		return fmt.Errorf("proxy configuration is required when default_outbound or a rule targets proxy (c)")
+	}
+	if input.Proxy != nil {
 		switch input.Proxy.Type {
 		case "http", "shadowsocks", "vmess", "vless", "trojan":
 		default:
@@ -115,6 +120,11 @@ func ValidateMVPModel(input MVPConfig) error {
 	if err := validateDNSServer("global", input.DNS.Global); err != nil {
 		return err
 	}
+	if input.DNS.Proxy != nil && input.DNS.Proxy.Server != "" {
+		if err := validateDNSServer("proxy", *input.DNS.Proxy); err != nil {
+			return err
+		}
+	}
 	if input.DNS.Domestic.Type == input.DNS.Global.Type && input.DNS.Domestic.Server == input.DNS.Global.Server && input.DNS.Domestic.Port == input.DNS.Global.Port && strings.EqualFold(input.DNS.Domestic.ServerName, input.DNS.Global.ServerName) {
 		return fmt.Errorf("domestic and global DNS upstreams must be distinct")
 	}
@@ -159,7 +169,7 @@ func ValidateMVPModel(input MVPConfig) error {
 			return fmt.Errorf("rule-set %q has unsupported kind %q", ruleSet.Tag, ruleSet.Kind)
 		}
 		switch ruleSet.Action {
-		case "a", "b", "final", "reject":
+		case "a", "b", "c", "final", "reject":
 		default:
 			return fmt.Errorf("rule-set %q has unsupported action %q", ruleSet.Tag, ruleSet.Action)
 		}
@@ -172,7 +182,7 @@ func ValidateMVPModel(input MVPConfig) error {
 			return fmt.Errorf("custom rule %q has unsupported type %q", custom.Name, custom.Type)
 		}
 		switch custom.Action {
-		case "a", "b", "final", "reject":
+		case "a", "b", "c", "final", "reject":
 		default:
 			return fmt.Errorf("custom rule %q has unsupported action %q", custom.Name, custom.Action)
 		}
@@ -219,10 +229,12 @@ func GenerateMVP(input MVPConfig) (Generated, error) {
 		{Type: "direct", Tag: "foreign-direct", BindInterface: input.InterfaceB.BindInterface},
 	}
 	finalOutbound := "foreign-direct"
-	if input.Mode == ModeDirectSplit && input.DefaultOutbound == "a" {
+	if input.DefaultOutbound == "a" {
 		finalOutbound = "domestic-direct"
+	} else if input.DefaultOutbound == "c" {
+		finalOutbound = "proxy"
 	}
-	if input.Mode == ModeProxySplit {
+	if input.Proxy != nil {
 		proxyBind := input.InterfaceB.BindInterface
 		if input.Proxy.Egress == "a" {
 			proxyBind = input.InterfaceA.BindInterface
@@ -279,7 +291,6 @@ func GenerateMVP(input MVPConfig) (Generated, error) {
 			}
 		}
 		outbounds = append(outbounds, proxyOutbound)
-		finalOutbound = "proxy"
 	}
 	bindings := make(map[string]string)
 	policyPrefixes := make([]policy.DirectPrefix, 0, len(directPrefixes))
@@ -302,7 +313,7 @@ func GenerateMVP(input MVPConfig) (Generated, error) {
 	}
 	infrastructureA := []string(nil)
 	infrastructureB := []string(nil)
-	if input.Mode == ModeProxySplit {
+	if input.Proxy != nil {
 		proxyAddress := netip.MustParseAddr(input.Proxy.Server)
 		proxyPrefix := netip.PrefixFrom(proxyAddress, proxyAddress.BitLen()).String()
 		if input.Proxy.Egress == "a" {
@@ -325,6 +336,8 @@ func GenerateMVP(input MVPConfig) (Generated, error) {
 			mapped.Action, mapped.Outbound = "route", "domestic-direct"
 		case "b":
 			mapped.Action, mapped.Outbound = "route", "foreign-direct"
+		case "c":
+			mapped.Action, mapped.Outbound = "route", "proxy"
 		case "final":
 			mapped.Action, mapped.Outbound = "route", finalOutbound
 		}
@@ -368,8 +381,10 @@ func GenerateMVP(input MVPConfig) (Generated, error) {
 			action, server = "route", "dns-domestic"
 		case "b":
 			action, server = "route", "dns-global"
+		case "c":
+			action, server = "route", "dns-proxy"
 		case "final":
-			action, server = "route", finalDNSResolver(input.Mode, input.DefaultOutbound)
+			action, server = "route", finalDNSResolver(input.DefaultOutbound)
 		default:
 			continue
 		}
@@ -398,8 +413,10 @@ func GenerateMVP(input MVPConfig) (Generated, error) {
 			action, server = "route", "dns-domestic"
 		case "b":
 			action, server = "route", "dns-global"
+		case "c":
+			action, server = "route", "dns-proxy"
 		case "final":
-			action, server = "route", finalDNSResolver(input.Mode, input.DefaultOutbound)
+			action, server = "route", finalDNSResolver(input.DefaultOutbound)
 		case "reject":
 			action = "reject"
 		}
@@ -407,15 +424,26 @@ func GenerateMVP(input MVPConfig) (Generated, error) {
 			dnsRules = append(dnsRules, DNSRule{RuleSet: []string{ruleSet.Tag}, Action: action, Server: server})
 		}
 	}
-	finalDNS := finalDNSResolver(input.Mode, input.DefaultOutbound)
+	finalDNS := finalDNSResolver(input.DefaultOutbound)
 	routeRuleSets := make([]RuleSet, 0, len(input.RuleSets))
 	for _, ruleSet := range input.RuleSets {
 		routeRuleSets = append(routeRuleSets, RuleSet{Type: "local", Tag: ruleSet.Tag, Format: "binary", Path: ruleSet.Path})
 	}
+	dnsServers := []DNSServer{
+		dnsServer("dns-domestic", input.DNS.Domestic, "domestic-direct"),
+		dnsServer("dns-global", input.DNS.Global, "foreign-direct"),
+	}
+	if input.Proxy != nil {
+		proxyDNS := input.DNS.Global
+		if input.DNS.Proxy != nil && input.DNS.Proxy.Server != "" {
+			proxyDNS = *input.DNS.Proxy
+		}
+		dnsServers = append(dnsServers, dnsServer("dns-proxy", proxyDNS, "proxy"))
+	}
 	model := MinimalTUN{
 		Log: LogConfig{Level: "info", Timestamp: true},
 		DNS: DNSConfig{
-			Servers: []DNSServer{dnsServer("dns-domestic", input.DNS.Domestic, "domestic-direct"), dnsServer("dns-global", input.DNS.Global, "foreign-direct")},
+			Servers: dnsServers,
 			Rules:   dnsRules,
 			Final:   finalDNS, Strategy: dnsStrategy(input.IPv6), IndependentCache: true,
 		},
@@ -452,6 +480,8 @@ func GenerateMVP(input MVPConfig) (Generated, error) {
 			outbound = "domestic-direct"
 		case "b":
 			outbound = "foreign-direct"
+		case "c":
+			outbound = "proxy"
 		case "final":
 			outbound = finalOutbound
 		case "reject":
@@ -510,13 +540,13 @@ func GenerateMVP(input MVPConfig) (Generated, error) {
 		return Generated{}, fmt.Errorf("marshal MVP configuration: %w", err)
 	}
 	proxyBindInterface := ""
-	if input.Mode == ModeProxySplit {
+	if input.Proxy != nil {
 		proxyBindInterface = input.InterfaceB.BindInterface
 		if input.Proxy.Egress == "a" {
 			proxyBindInterface = input.InterfaceA.BindInterface
 		}
 	}
-	generated := Generated{Model: model, JSON: append(data, '\n'), RuleCategories: categories, Mode: input.Mode, ProxyBindInterface: proxyBindInterface}
+	generated := Generated{Model: model, JSON: append(data, '\n'), RuleCategories: categories, ProxyBindInterface: proxyBindInterface}
 	if err := ValidateGeneratedSchema(generated.JSON); err != nil {
 		return Generated{}, err
 	}
@@ -598,9 +628,12 @@ func normalizedDomainCopy(values []string) []string {
 	return result
 }
 
-func finalDNSResolver(mode, defaultOutbound string) string {
-	if mode == ModeDirectSplit && defaultOutbound == "a" {
+func finalDNSResolver(defaultOutbound string) string {
+	if defaultOutbound == "a" {
 		return "dns-domestic"
+	}
+	if defaultOutbound == "c" {
+		return "dns-proxy"
 	}
 	return "dns-global"
 }

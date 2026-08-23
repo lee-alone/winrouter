@@ -10,7 +10,6 @@ export interface ApplicationStatus {
   name: string
   version: string
   commit: string
-  mode: string
   coreVersion: string
   ready: boolean
 }

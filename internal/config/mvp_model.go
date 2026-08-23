@@ -1,18 +1,15 @@
 package config
 
 const (
-	SchemaVersion1  = 1
-	ModeDirectSplit = "direct-split"
-	ModeProxySplit  = "proxy-split"
-	IPv6Block       = "block"
-	IPv6Split       = "split"
+	SchemaVersion1 = 1
+	IPv6Block      = "block"
+	IPv6Split      = "split"
 
 	DefaultIPv6TUNPrefix = "fdfe:dcba:9876::/126"
 )
 
 type MVPConfig struct {
 	SchemaVersion         int               `json:"schema_version"`
-	Mode                  string            `json:"mode"`
 	TUN                   MVPTUN            `json:"tun"`
 	InterfaceA            MVPInterface      `json:"interface_a"`
 	InterfaceB            MVPInterface      `json:"interface_b"`
@@ -90,8 +87,9 @@ type MVPDomestic struct {
 	DomainSuffixes []string `json:"domain_suffixes"`
 }
 type MVPDNS struct {
-	Domestic MVPDNSServer `json:"domestic"`
-	Global   MVPDNSServer `json:"global"`
+	Domestic MVPDNSServer  `json:"domestic"`
+	Global   MVPDNSServer  `json:"global"`
+	Proxy    *MVPDNSServer `json:"proxy,omitempty"`
 }
 type MVPDNSServer struct {
 	Type       string `json:"type"`
@@ -104,7 +102,6 @@ type Generated struct {
 	Model              MinimalTUN
 	JSON               []byte
 	RuleCategories     []string
-	Mode               string
 	ProxyBindInterface string
 }
 

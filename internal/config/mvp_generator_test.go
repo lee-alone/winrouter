@@ -288,7 +288,7 @@ func TestValidateMVPModelRejectsErrorsAndUnopenedModes(t *testing.T) {
 	base := fixtureInput(t)
 	tests := []func(*MVPConfig){
 		func(value *MVPConfig) { value.SchemaVersion = 2 },
-		func(value *MVPConfig) { value.Mode = "hybrid" },
+		func(value *MVPConfig) { value.DefaultOutbound = "invalid" },
 		func(value *MVPConfig) { value.InterfaceB.GUID = value.InterfaceA.GUID },
 		func(value *MVPConfig) { value.TUN.Prefix = "172.19.0.1/30" },
 		func(value *MVPConfig) { value.TUN.Stack = "bad" },
@@ -309,7 +309,7 @@ func TestValidateMVPModelRejectsErrorsAndUnopenedModes(t *testing.T) {
 
 func TestGenerateProxySplitUsesStrictProxyFinalBoundToInterfaceB(t *testing.T) {
 	input := fixtureInput(t)
-	input.Mode = ModeProxySplit
+	input.DefaultOutbound = "c"
 	input.Proxy = &MVPProxy{Type: "http", Server: "203.0.113.10", Port: 8080}
 	generated, err := GenerateMVP(input)
 	if err != nil {
@@ -340,7 +340,7 @@ func TestGenerateProxySplitUsesStrictProxyFinalBoundToInterfaceB(t *testing.T) {
 
 func TestGenerateProxySplitIncludesHTTPAuthentication(t *testing.T) {
 	input := fixtureInput(t)
-	input.Mode = ModeProxySplit
+	input.DefaultOutbound = "c"
 	input.Proxy = &MVPProxy{Type: "http", Server: "203.0.113.10", Port: 8080, Username: "alice", Password: "secret"}
 	generated, err := GenerateMVP(input)
 	if err != nil {
@@ -359,7 +359,7 @@ func TestGenerateProxySplitIncludesHTTPAuthentication(t *testing.T) {
 
 func TestGenerateProxySplitIncludesShadowsocksMethod(t *testing.T) {
 	input := fixtureInput(t)
-	input.Mode = ModeProxySplit
+	input.DefaultOutbound = "c"
 	input.Proxy = &MVPProxy{Type: "shadowsocks", Server: "37.19.198.244", Port: 443, Method: "aes-128-gcm", Password: "shadowsocks"}
 	generated, err := GenerateMVP(input)
 	if err != nil {
@@ -378,7 +378,7 @@ func TestGenerateProxySplitIncludesShadowsocksMethod(t *testing.T) {
 
 func TestGenerateProxySplitEgressA(t *testing.T) {
 	input := fixtureInput(t)
-	input.Mode = ModeProxySplit
+	input.DefaultOutbound = "c"
 	input.Proxy = &MVPProxy{Type: "http", Server: "203.0.113.10", Port: 8080, Egress: "a"}
 	generated, err := GenerateMVP(input)
 	if err != nil {
@@ -444,7 +444,7 @@ func TestGenerateVMessAndVLESSAndTrojanOutbounds(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			input := fixtureInput(t)
-			input.Mode = ModeProxySplit
+			input.DefaultOutbound = "c"
 			input.Proxy = &tc.proxy
 			generated, err := GenerateMVP(input)
 			if err != nil {
@@ -468,7 +468,7 @@ func TestGenerateVMessAndVLESSAndTrojanOutbounds(t *testing.T) {
 
 func TestValidateProxySplitRejectsMissingInvalidProxyAndHybrid(t *testing.T) {
 	base := fixtureInput(t)
-	base.Mode = ModeProxySplit
+	base.DefaultOutbound = "c"
 	tests := []func(*MVPConfig){
 		func(value *MVPConfig) {},
 		func(value *MVPConfig) { value.Proxy = &MVPProxy{Type: "socks", Server: "203.0.113.10", Port: 1080} },
@@ -497,9 +497,9 @@ func TestValidateProxySplitRejectsMissingInvalidProxyAndHybrid(t *testing.T) {
 			t.Fatalf("invalid proxy case %d accepted", index)
 		}
 	}
-	base.Mode = "hybrid"
+	base.DefaultOutbound = "invalid"
 	if err := ValidateMVPModel(base); err == nil {
-		t.Fatal("hybrid accepted")
+		t.Fatal("invalid default_outbound accepted")
 	}
 }
 
@@ -529,7 +529,7 @@ func TestValidationLayersRejectTamperedOutput(t *testing.T) {
 
 func TestProxySemanticsRejectMissingLoopPreventionRule(t *testing.T) {
 	input := fixtureInput(t)
-	input.Mode = ModeProxySplit
+	input.DefaultOutbound = "c"
 	input.Proxy = &MVPProxy{Type: "http", Server: "203.0.113.10", Port: 8080}
 	generated, err := GenerateMVP(input)
 	if err != nil {
@@ -553,7 +553,7 @@ func TestProxySemanticsRejectMissingLoopPreventionRule(t *testing.T) {
 
 func TestProxySemanticsWithIPv6Proxy(t *testing.T) {
 	input := fixtureInput(t)
-	input.Mode = ModeProxySplit
+	input.DefaultOutbound = "c"
 	input.IPv6 = IPv6Split
 	input.Proxy = &MVPProxy{Type: "http", Server: "2001:db8::1", Port: 8080}
 	generated, err := GenerateMVP(input)
@@ -594,7 +594,7 @@ func TestGenerateMVPWithCustomIPv6TUNPrefix(t *testing.T) {
 func TestProxyRejectsPrivateAndULAAddress(t *testing.T) {
 	for _, ip := range []string{"192.168.1.1", "10.0.0.1", "172.16.0.1", "fc00::1", "fd00::1", "fe80::1", "::1", "::"} {
 		input := fixtureInput(t)
-		input.Mode = ModeProxySplit
+		input.DefaultOutbound = "c"
 		input.Proxy = &MVPProxy{Type: "http", Server: ip, Port: 8080}
 		if err := ValidateMVPModel(input); err == nil {
 			t.Fatalf("ValidateMVPModel() succeeded for private/ULA IP %q, want error", ip)
@@ -670,6 +670,174 @@ func TestGenerateMVPTUNLocalIPv6AddressAndFirstMatchOrder(t *testing.T) {
 	}
 	if !(localPos < directPos && directPos < reservedPos) {
 		t.Fatalf("expected order local < direct-prefix < reserved, got local=%d, direct=%d, reserved=%d", localPos, directPos, reservedPos)
+	}
+}
+
+func TestUnifiedMultiEgressRoutingMatrix(t *testing.T) {
+	input := fixtureInput(t)
+	input.DefaultOutbound = "c"
+	input.Proxy = &MVPProxy{Type: "http", Server: "203.0.113.10", Port: 8080}
+	input.CustomRules = []MVPCustomRule{
+		{ID: "rule-a", Name: "Domestic", Type: "domain-suffix", Value: "baidu.com", Action: "a"},
+		{ID: "rule-b", Name: "Direct Foreign", Type: "domain-suffix", Value: "internal.org", Action: "b"},
+		{ID: "rule-c", Name: "Proxy Foreign", Type: "domain-suffix", Value: "google.com", Action: "c"},
+		{ID: "rule-rej", Name: "Blocked", Type: "domain-suffix", Value: "ads.com", Action: "reject"},
+		{ID: "rule-fin", Name: "Default Follower", Type: "domain-suffix", Value: "default.com", Action: "final"},
+	}
+
+	generated, err := GenerateMVP(input)
+	if err != nil {
+		t.Fatalf("GenerateMVP() error: %v", err)
+	}
+
+	if generated.Model.Route.Final != "proxy" {
+		t.Fatalf("expected route.final proxy, got %q", generated.Model.Route.Final)
+	}
+
+	if generated.Model.DNS.Final != "dns-proxy" {
+		t.Fatalf("expected dns.final dns-proxy, got %q", generated.Model.DNS.Final)
+	}
+
+	// Verify DNS server detours
+	var hasProxyDNS, hasDomesticDNS, hasGlobalDNS bool
+	for _, server := range generated.Model.DNS.Servers {
+		switch server.Tag {
+		case "dns-domestic":
+			if server.Detour != "domestic-direct" {
+				t.Fatalf("dns-domestic detour = %q", server.Detour)
+			}
+			hasDomesticDNS = true
+		case "dns-global":
+			if server.Detour != "foreign-direct" {
+				t.Fatalf("dns-global detour = %q", server.Detour)
+			}
+			hasGlobalDNS = true
+		case "dns-proxy":
+			if server.Detour != "proxy" {
+				t.Fatalf("dns-proxy detour = %q", server.Detour)
+			}
+			hasProxyDNS = true
+		}
+	}
+	if !hasProxyDNS || !hasDomesticDNS || !hasGlobalDNS {
+		t.Fatalf("missing DNS servers: proxy=%v domestic=%v global=%v", hasProxyDNS, hasDomesticDNS, hasGlobalDNS)
+	}
+
+	// Verify DNS routing rules
+	foundDNS := make(map[string]string)
+	for _, rule := range generated.Model.DNS.Rules {
+		for _, domain := range rule.DomainSuffix {
+			if rule.Action == "reject" {
+				foundDNS[domain] = "reject"
+			} else {
+				foundDNS[domain] = rule.Server
+			}
+		}
+	}
+	if foundDNS["baidu.com"] != "dns-domestic" {
+		t.Errorf("baidu.com DNS = %q, want dns-domestic", foundDNS["baidu.com"])
+	}
+	if foundDNS["internal.org"] != "dns-global" {
+		t.Errorf("internal.org DNS = %q, want dns-global", foundDNS["internal.org"])
+	}
+	if foundDNS["google.com"] != "dns-proxy" {
+		t.Errorf("google.com DNS = %q, want dns-proxy", foundDNS["google.com"])
+	}
+	if foundDNS["ads.com"] != "reject" {
+		t.Errorf("ads.com DNS = %q, want reject", foundDNS["ads.com"])
+	}
+	if foundDNS["default.com"] != "dns-proxy" {
+		t.Errorf("default.com DNS = %q, want dns-proxy", foundDNS["default.com"])
+	}
+
+	// Verify route rules
+	foundRoute := make(map[string]string)
+	for _, rule := range generated.Model.Route.Rules {
+		for _, domain := range rule.DomainSuffix {
+			if rule.Action == "reject" {
+				foundRoute[domain] = "reject"
+			} else {
+				foundRoute[domain] = rule.Outbound
+			}
+		}
+	}
+	if foundRoute["baidu.com"] != "domestic-direct" {
+		t.Errorf("baidu.com route = %q, want domestic-direct", foundRoute["baidu.com"])
+	}
+	if foundRoute["internal.org"] != "foreign-direct" {
+		t.Errorf("internal.org route = %q, want foreign-direct", foundRoute["internal.org"])
+	}
+	if foundRoute["google.com"] != "proxy" {
+		t.Errorf("google.com route = %q, want proxy", foundRoute["google.com"])
+	}
+	if foundRoute["ads.com"] != "reject" {
+		t.Errorf("ads.com route = %q, want reject", foundRoute["ads.com"])
+	}
+	if foundRoute["default.com"] != "proxy" {
+		t.Errorf("default.com route = %q, want proxy", foundRoute["default.com"])
+	}
+
+	// Test missing proxy validation: when rule targets C but Proxy is nil
+	inputNoProxy := fixtureInput(t)
+	inputNoProxy.Proxy = nil
+	inputNoProxy.CustomRules = []MVPCustomRule{
+		{ID: "rule-c", Name: "Proxy", Type: "domain-suffix", Value: "google.com", Action: "c"},
+	}
+	if err := ValidateMVPModel(inputNoProxy); err == nil {
+		t.Fatal("expected error when rule targets proxy (c) without proxy configured")
+	}
+}
+
+func TestProxyDNSExplicitConfiguration(t *testing.T) {
+	input := fixtureInput(t)
+	input.Proxy = &MVPProxy{Type: "http", Server: "198.51.100.10", Port: 8080}
+	input.DNS.Global = MVPDNSServer{Type: "udp", Server: "9.9.9.9", Port: 53}
+
+	// 1. When DNS.Proxy is nil, dns-proxy must use DNS.Global directly (no silent Cloudflare substitution)
+	input.DNS.Proxy = nil
+	generated, err := GenerateMVP(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var proxyDNS *DNSServer
+	for _, s := range generated.Model.DNS.Servers {
+		if s.Tag == "dns-proxy" {
+			proxyDNS = &s
+			break
+		}
+	}
+	if proxyDNS == nil {
+		t.Fatal("dns-proxy server not found")
+	}
+	if proxyDNS.Type != "udp" || proxyDNS.Server != "9.9.9.9" || proxyDNS.ServerPort != 53 || proxyDNS.Detour != "proxy" {
+		t.Fatalf("dns-proxy = %#v, expected udp 9.9.9.9:53 detour proxy", proxyDNS)
+	}
+
+	// 2. When DNS.Proxy is explicitly configured, dns-proxy must use the specified server
+	input.DNS.Proxy = &MVPDNSServer{Type: "tls", Server: "8.8.4.4", Port: 853, ServerName: "dns.google"}
+	generated2, err := GenerateMVP(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var proxyDNS2 *DNSServer
+	for _, s := range generated2.Model.DNS.Servers {
+		if s.Tag == "dns-proxy" {
+			proxyDNS2 = &s
+			break
+		}
+	}
+	if proxyDNS2 == nil {
+		t.Fatal("dns-proxy server not found in second generation")
+	}
+	if proxyDNS2.Type != "tls" || proxyDNS2.Server != "8.8.4.4" || proxyDNS2.ServerPort != 853 || proxyDNS2.TLS == nil || proxyDNS2.TLS.ServerName != "dns.google" || proxyDNS2.Detour != "proxy" {
+		t.Fatalf("dns-proxy = %#v, expected tls 8.8.4.4:853 dns.google", proxyDNS2)
+	}
+
+	// 3. Validation rejects invalid DNS.Proxy
+	invalidInput := input
+	invalidInput.DNS.Proxy = &MVPDNSServer{Type: "tls", Server: "not-an-ip", Port: 853, ServerName: "dns.google"}
+	if err := ValidateMVPModel(invalidInput); err == nil {
+		t.Fatal("expected error for invalid proxy DNS IP")
 	}
 }
 

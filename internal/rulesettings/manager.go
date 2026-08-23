@@ -144,8 +144,8 @@ func Validate(value Settings) error {
 	if value.SchemaVersion != SchemaVersion {
 		return fmt.Errorf("unsupported rule settings schema_version %d", value.SchemaVersion)
 	}
-	if value.DefaultOutbound != "a" && value.DefaultOutbound != "b" {
-		return errors.New("default_outbound must be a or b")
+	if value.DefaultOutbound != "a" && value.DefaultOutbound != "b" && value.DefaultOutbound != "c" {
+		return errors.New("default_outbound must be a, b, or c")
 	}
 	if len(value.Rules) > 200 {
 		return errors.New("rules exceed the limit of 200")
@@ -169,7 +169,7 @@ func Validate(value Settings) error {
 			return fmt.Errorf("rule %q has unsupported type %q", rule.ID, rule.Type)
 		}
 		switch rule.Action {
-		case "a", "b", "final", "reject":
+		case "a", "b", "c", "final", "reject":
 		default:
 			return fmt.Errorf("rule %q has unsupported action %q", rule.ID, rule.Action)
 		}

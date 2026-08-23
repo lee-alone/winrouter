@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, onUnmounted, ref } from 'vue'
 import { AddProxyNode, AddSubscription, ApplyCoreConfiguration, ApplySelectedProxyConfiguration, ConfigureSRSSource, DeleteProxyNode, DeleteSRSSource, DeleteSubscription, ExportDiagnosticBundle, GetApplicationConfigDirectory, GetAutostartStatus, GetConnectionObservationEnabled, GetCoreStatus, GetDNSPresets, GetDNSSettings, GetInterfaceSnapshot, GetIPv6Policy, GetObservations, GetRecoveryStatus, GetRuleSettings, GetSRSPresets, GetStatus, GetTrafficBudgetStatus, InspectProcessRules, ListProxyNodes, ListSRSSources, ListSubscriptions, PreviewCoreRules, PreviewDiagnosticBundle, RecordApplicationLog, RefreshSRSSource, RefreshSubscription, RepairApplicationSettings, ResetApplicationSettings, ResetInterfaceSelection, ResetTrafficBudget, ResetWindowsNetworkStack, RunHealthProbe, SelectInterfaces, SelectProxyNode, SetAutostartEnabled, SetConnectionObservationEnabled, SetDNSSettings, SetIPv6Policy, SetProxyNodeFavorite, SetRuleSettings, SetTrafficBudget, SpeedTestProxyNodes, StopCore, TestDNSServer, TestProxyNode, UpdateProxyNode, UpdateSubscription, ValidateCoreConfiguration, ValidateSelectedProxyConfiguration } from '../wailsjs/go/main/App'
 import type { config, core, interfacemanager, interfaces, main, nodes, observability, processrules, rulesettings, srssets, subscriptions } from '../wailsjs/go/models'
 import { EventsOn } from '../wailsjs/runtime/runtime'
@@ -11,7 +11,7 @@ type LogLevel = 'info' | 'warning' | 'error'
 type LogEntry = { id: number; time: string; level: LogLevel; message: string; correlation?: string }
 type RecoveryStatus = { state: 'idle' | 'monitoring' | 'stopping' | 'waiting-for-network' | 'recovering' | 'failed'; desired_running: boolean; attempts: number; last_error?: string; last_change?: string; snapshot_sequence?: number }
 
-const app = ref<ApplicationStatus>({ name: 'WinRouter', version: 'development', commit: 'unknown', mode: 'direct-split', coreVersion: '1.13.15', ready: false })
+const app = ref<ApplicationStatus>({ name: 'WinRouter', version: 'development', commit: 'unknown', coreVersion: '1.13.15', ready: false })
 const snapshot = ref<interfacemanager.Snapshot>()
 const coreStatus = ref<core.Status>({ state: 'stopped', generation: 0, restart_attempts: 0, abnormal: false })
 const recoveryStatus = ref<RecoveryStatus>({ state: 'idle', desired_running: false, attempts: 0 })
@@ -32,12 +32,17 @@ type UsageBaseline = { received: number; transmitted: number; reset_at: string }
 type DiagnosticRecommendation = { severity: 'error' | 'warning' | 'info'; title: string; detail: string; action: 'interfaces' | 'probe' | 'export' | 'none' }
 type TrafficBudgetStatus = { enabled: boolean; budget_gb: number; warning_percent: number; period: string; used_bytes: number; budget_bytes: number; used_percent: number; warning_reached: boolean; limit_reached: boolean; interface_guid?: string }
 type DNSServer = { preset_id?: string; type: 'udp' | 'tls' | 'https'; server: string; port: number; server_name?: string }
-type DNSSettings = { schema_version: number; domestic: DNSServer; global: DNSServer }
-type DNSPreset = DNSServer & { id: string; name: string; scope: 'domestic' | 'global' }
+type DNSSettings = { schema_version: number; domestic: DNSServer; global: DNSServer; proxy?: DNSServer }
+type DNSPreset = DNSServer & { id: string; name: string; scope: 'domestic' | 'global' | 'proxy' }
 type DNSTestState = 'idle' | 'testing' | 'success' | 'failed'
 function normalizeDNSSettings(value: DNSSettings): DNSSettings {
   const normalizeServer = (server: DNSServer): DNSServer => ({ ...server, preset_id: server.preset_id ?? '', server_name: server.server_name ?? '' })
-  return { ...value, domestic: normalizeServer(value.domestic), global: normalizeServer(value.global) }
+  return {
+    ...value,
+    domestic: normalizeServer(value.domestic),
+    global: normalizeServer(value.global),
+    proxy: value.proxy ? normalizeServer(value.proxy) : { preset_id: 'proxy-google-udp', type: 'udp', server: '8.8.8.8', port: 53, server_name: '' }
+  }
 }
 const emptyTrafficBudget: TrafficBudgetStatus = { enabled: false, budget_gb: 100, warning_percent: 80, period: '', used_bytes: 0, budget_bytes: 0, used_percent: 0, warning_reached: false, limit_reached: false }
 const observations = ref<{ probes: observability.ProbeResult[]; counters: observability.InterfaceCounter[]; rule_sets: observability.RuleSetMetadata[]; connections: ConnectionSummary; rule_hits: RuleHit[]; connection_observation: boolean; connection_events: ConnectionEvent[]; traffic_budget: TrafficBudgetStatus }>({ probes: [], counters: [], rule_sets: [], connections: { active_tcp: 0, established_tcp: 0, listening_tcp: 0, udp_endpoints: 0 }, rule_hits: [], connection_observation: false, connection_events: [], traffic_budget: emptyTrafficBudget })
@@ -53,10 +58,10 @@ const autostartEnabled = ref(false)
 const autostartBusy = ref(false)
 const budgetBusy = ref(false)
 const budgetForm = ref({ enabled: false, budget_gb: 100, warning_percent: 80 })
-const dnsSettings = ref<DNSSettings>({ schema_version: 1, domestic: { preset_id: 'aliyun-udp', type: 'udp', server: '223.5.5.5', port: 53 }, global: { preset_id: 'google-udp', type: 'udp', server: '8.8.8.8', port: 53 } })
+const dnsSettings = ref<DNSSettings>({ schema_version: 1, domestic: { preset_id: 'aliyun-udp', type: 'udp', server: '223.5.5.5', port: 53 }, global: { preset_id: 'google-udp', type: 'udp', server: '8.8.8.8', port: 53 }, proxy: { preset_id: 'proxy-google-udp', type: 'udp', server: '8.8.8.8', port: 53 } })
 const dnsPresets = ref<DNSPreset[]>([])
 const dnsBusy = ref(false)
-const dnsTests = ref<Record<'domestic' | 'global', DNSTestState>>({ domestic: 'idle', global: 'idle' })
+const dnsTests = ref<Record<'domestic' | 'global' | 'proxy', DNSTestState>>({ domestic: 'idle', global: 'idle', proxy: 'idle' })
 const observationsError = ref('')
 const ipv6Policy = ref<'block' | 'split'>('block')
 const ipv6Busy = ref(false)
@@ -123,8 +128,7 @@ const proxyFieldErrors = ref<Record<string, string>>({})
 const proxyImportOpen = ref(false)
 const proxyImportURI = ref('')
 const proxyImportError = ref('')
-const selectedMode = ref<'direct-split' | 'proxy-split'>('direct-split')
-const defaultOutbound = ref<'a' | 'b'>('b')
+const defaultOutbound = ref<'a' | 'b' | 'c'>('b')
 const proxyTests = ref<Record<string, nodes.TestResult>>({})
 const testingProxyID = ref('')
 const testingAllProxies = ref(false)
@@ -134,7 +138,7 @@ const subscriptionFormOpen = ref(false)
 const subscriptionForm = ref({ id: '', name: '', url: '' })
 const refreshingSubscriptionID = ref('')
 type InlineRuleType = 'domain-suffix' | 'domain' | 'ip' | 'process-name' | 'process-path'
-type RuleAction = 'a' | 'b' | 'final' | 'reject'
+type RuleAction = 'a' | 'b' | 'c' | 'final' | 'reject'
 type CustomRule = { id: string; name: string; type: InlineRuleType; values: string[]; action: RuleAction; enabled: boolean }
 type RuleForm = { id: string; name: string; type: InlineRuleType | 'rule-set'; valuesText: string; action: RuleAction; enabled: boolean }
 const customRules = ref<CustomRule[]>([])
@@ -147,7 +151,7 @@ const processRuleStatuses = ref<processrules.Status[]>([])
 const srsPresets = ref<srssets.Preset[]>([])
 const srsSources = ref<srssets.Source[]>([])
 const srsBusyID = ref('')
-const srsForm = ref({ id: '', name: '', kind: 'domain', preset_id: '', url: '', expected_sha256: '', enabled: true, action: 'a' })
+const srsForm = ref({ id: '', name: '', kind: 'domain', preset_id: '', url: '', expected_sha256: '', enabled: true, action: 'a' as RuleAction })
 let nextLogID = 1
 let stopEvents: (() => void) | undefined
 let stopRecoveryEvents: (() => void) | undefined
@@ -295,7 +299,7 @@ function chooseSRSPreset() {
 }
 
 function editSRSSource(source: srssets.Source) {
-  srsForm.value = { id: source.id, name: source.name, kind: source.kind, preset_id: source.preset_id || '', url: source.url, expected_sha256: source.expected_sha256 || '', enabled: source.enabled, action: source.action }
+  srsForm.value = { id: source.id, name: source.name, kind: source.kind, preset_id: source.preset_id || '', url: source.url, expected_sha256: source.expected_sha256 || '', enabled: source.enabled, action: source.action as RuleAction }
   ruleForm.value = { id: source.id, name: source.name, type: 'rule-set', valuesText: '', action: source.action as RuleAction, enabled: source.enabled }
   ruleFormOpen.value = true
 }
@@ -1159,25 +1163,6 @@ async function deleteProxyNode(node: nodes.Node) {
   catch (reason) { error.value = `无法删除代理节点：${messageOf(reason)}` }
 }
 
-function setMode(mode: 'direct-split' | 'proxy-split') {
-  if (mode === selectedMode.value) return
-  error.value = ''
-  if (isRunning.value) {
-    error.value = '请先停止当前核心，再切换运行模式。'
-    return
-  }
-  if (mode === 'proxy-split') {
-    if (!proxyNodes.value.some(node => node.selected)) {
-      error.value = '请先添加并选择一个代理节点。'
-      view.value = 'proxy'
-      return
-    }
-    if (!window.confirm('代理模式会将非国内公网流量严格送入所选代理。代理故障时不会回退为直连，确认切换吗？')) return
-  }
-  selectedMode.value = mode
-  notice.value = mode === 'proxy-split' ? '已切换为代理模式，启动前仍会执行完整校验。' : '已切换为双网卡直连模式。'
-}
-
 function getBootstrapDNSServer(): string {
   return dnsSettings.value.domestic?.server || '223.5.5.5'
 }
@@ -1260,7 +1245,6 @@ function buildConfig(): config.MVPConfig {
   if (!interfaceA || !interfaceB || !snapshot.value?.tun) throw new Error('接口或 TUN 前缀尚未就绪')
   return {
     schema_version: 1,
-    mode: selectedMode.value,
     tun: { prefix: snapshot.value.tun.prefix, stack: 'system' },
     interface_a: { guid: interfaceA.guid, bind_interface: interfaceA.friendly_name },
     interface_b: { guid: interfaceB.guid, bind_interface: interfaceB.friendly_name },
@@ -1269,15 +1253,35 @@ function buildConfig(): config.MVPConfig {
     rule_order: ruleOrder.value,
     custom_rules: customRules.value.filter(rule => rule.enabled).flatMap(rule => rule.values.map(value => ({ id: rule.id, name: rule.name, type: rule.type, value, action: rule.action }))),
     domestic: { cidrs: [], domain_suffixes: [] },
-    dns: { domestic: { ...dnsSettings.value.domestic }, global: { ...dnsSettings.value.global } },
-    ...(selectedMode.value === 'proxy-split' ? { proxy: { type: 'http', server: '0.0.0.0', port: 1 } } : {}),
+    dns: {
+      domestic: { ...dnsSettings.value.domestic },
+      global: { ...dnsSettings.value.global },
+      proxy: dnsSettings.value.proxy ? { ...dnsSettings.value.proxy } : undefined,
+    },
     ipv6: ipv6Policy.value,
   } as unknown as config.MVPConfig
 }
 
-function updateDefaultOutbound(value: 'a' | 'b') {
+function updateDefaultOutbound(value: 'a' | 'b' | 'c') {
   defaultOutbound.value = value
   void saveRuleSettings().then(refreshRulePreview)
+}
+
+function formatRuleAction(action: RuleAction): string {
+  switch (action) {
+    case 'a':
+      return `出口 A · ${selectedAdapterA.value?.friendly_name ?? '网卡 A'}`
+    case 'b':
+      return `出口 B · ${selectedAdapterB.value?.friendly_name ?? '网卡 B'}`
+    case 'c':
+      return `出口 C · 代理 (${proxyNodes.value.find(n => n.selected)?.name ?? '活动节点'})`
+    case 'reject':
+      return '阻断拒绝'
+    case 'final':
+      return `跟随默认 (${defaultOutbound.value.toUpperCase()})`
+    default:
+      return action
+  }
 }
 
 async function startCore() {
@@ -1297,10 +1301,9 @@ async function startCore() {
   try {
     await flushRuleSettings()
     const input = buildConfig()
-    if (selectedMode.value === 'proxy-split') await ValidateSelectedProxyConfiguration(input)
-    else await ValidateCoreConfiguration(input)
+    await ValidateCoreConfiguration(input)
     addLog('info', '配置预检通过，正在请求管理员权限。')
-    coreStatus.value = selectedMode.value === 'proxy-split' ? await ApplySelectedProxyConfiguration(input) : await ApplyCoreConfiguration(input)
+    coreStatus.value = await ApplyCoreConfiguration(input)
     notice.value = '分流核心已启动。'
     addLog('info', `核心已应用，进程 ${coreStatus.value.pid ?? '未知'}，代次 ${coreStatus.value.generation}`)
   } catch (reason) {
@@ -1404,7 +1407,7 @@ async function resetApplicationSettings() {
     const storedRules = await GetRuleSettings()
     customRules.value = Array.isArray(storedRules.rules) ? storedRules.rules as CustomRule[] : []
     ruleOrder.value = Array.isArray(storedRules.rule_order) ? [...storedRules.rule_order] : []
-    defaultOutbound.value = storedRules.default_outbound as 'a' | 'b'
+    defaultOutbound.value = storedRules.default_outbound as 'a' | 'b' | 'c'
     dnsSettings.value = normalizeDNSSettings(await GetDNSSettings() as DNSSettings)
     ipv6Policy.value = await GetIPv6Policy() as 'block' | 'split'
     coreStatus.value = { ...coreStatus.value, state: 'stopped', pid: 0 }
@@ -1430,18 +1433,25 @@ async function copyApplicationConfigDirectory() {
     notice.value = '配置目录路径已复制。'
   } catch (reason) { error.value = `无法复制配置目录路径：${messageOf(reason)}` }
 }
-function chooseDNSPreset(scope: 'domestic' | 'global') {
+function chooseDNSPreset(scope: 'domestic' | 'global' | 'proxy') {
   const target = dnsSettings.value[scope]
-  if (!target.preset_id) return
-  const preset = dnsPresets.value.find(item => item.id === target.preset_id && item.scope === scope)
+  if (!target || !target.preset_id) return
+  const preset = dnsPresets.value.find(item => item.id === target.preset_id && (item.scope === scope || (scope === 'proxy' && item.scope === 'global')))
   if (preset) dnsSettings.value[scope] = { preset_id: preset.id, type: preset.type, server: preset.server, port: preset.port, server_name: preset.server_name || '' }
   dnsTests.value[scope] = 'idle'
 }
-function setCustomDNS(scope: 'domestic' | 'global') { dnsSettings.value[scope].preset_id = ''; dnsTests.value[scope] = 'idle' }
-async function testDNSServer(scope: 'domestic' | 'global') {
+function setCustomDNS(scope: 'domestic' | 'global' | 'proxy') {
+  if (dnsSettings.value[scope]) {
+    dnsSettings.value[scope]!.preset_id = ''
+  }
+  dnsTests.value[scope] = 'idle'
+}
+async function testDNSServer(scope: 'domestic' | 'global' | 'proxy') {
+  const target = dnsSettings.value[scope]
+  if (!target) return
   dnsTests.value[scope] = 'testing'
   try {
-    const result = await TestDNSServer({ ...dnsSettings.value[scope] } as any) as { success: boolean }
+    const result = await TestDNSServer({ ...target } as any) as { success: boolean }
     dnsTests.value[scope] = result.success ? 'success' : 'failed'
   } catch { dnsTests.value[scope] = 'failed' }
 }
@@ -1487,7 +1497,7 @@ onMounted(async () => {
     ipv6Policy.value = storedIPv6 as 'block' | 'split'
     customRules.value = (storedRules.initialized && Array.isArray(storedRules.rules) ? storedRules.rules : []) as CustomRule[]
     ruleOrder.value = [...(storedRules.initialized && Array.isArray(storedRules.rule_order) ? storedRules.rule_order : [])]
-    defaultOutbound.value = (storedRules.initialized ? storedRules.default_outbound : 'b') as 'a' | 'b'
+    defaultOutbound.value = (storedRules.initialized ? storedRules.default_outbound : 'b') as 'a' | 'b' | 'c'
     proxyNodes.value = await ListProxyNodes()
     subscriptionList.value = await ListSubscriptions()
     srsPresets.value = await GetSRSPresets()
@@ -1500,33 +1510,39 @@ onMounted(async () => {
   } catch (reason) {
     initializationFailed.value = true
     error.value = `初始化失败：${messageOf(reason)}`
-    addLog('error', error.value, true)
   }
-  stopEvents = EventsOn('interfaces:changed', (event: { reason: string; snapshot: interfacemanager.Snapshot }) => {
-    syncSelection(event.snapshot)
-    addLog(event.snapshot.diagnostics.some(item => item.severity === 'error') ? 'warning' : 'info', '检测到网络接口变化，预检状态已刷新。')
+  stopEvents = EventsOn('core-status', payload => {
+    coreStatus.value = payload as core.Status
+    if (coreStatus.value.abnormal) addLog('error', `核心异常：${coreStatus.value.last_error || '未知错误'}`, true)
   })
-  stopRecoveryEvents = EventsOn('recovery:changed', (status: RecoveryStatus) => {
-	const previous = recoveryStatus.value.state
-    recoveryStatus.value = status
-    if (status.state === 'waiting-for-network') addLog('warning', '选定网卡不可用，核心已安全停止并等待网络恢复。')
-    if (status.state === 'recovering') addLog('info', `网络已稳定，正在执行第 ${status.attempts} 次恢复。`)
-    if (status.state === 'monitoring' && status.desired_running && ['stopping', 'waiting-for-network', 'recovering', 'failed'].includes(previous)) { void refreshStatus(); addLog('info', '双出口已恢复，分流配置已重新应用。') }
-    if (status.state === 'failed') addLog('error', `自动恢复失败：${status.last_error || '未知错误'}`, true)
+  stopRecoveryEvents = EventsOn('recovery-status', payload => {
+    recoveryStatus.value = payload as RecoveryStatus
+    if (recoveryStatus.value.state === 'failed') addLog('error', `网络恢复失败：${recoveryStatus.value.last_error}`, true)
   })
-  stopTrayStartEvents = EventsOn('tray:start-core', () => { void startCore() })
-  stopBudgetEvents = EventsOn('traffic-budget:reached', (threshold: 'warning' | 'limit', status: TrafficBudgetStatus) => {
-    observations.value.traffic_budget = status
-    addLog('warning', threshold === 'limit' ? '网卡 B 本月接口流量已达到预算。' : `网卡 B 本月接口流量已达到 ${status.warning_percent}% 提醒阈值。`)
+  stopTrayStartEvents = EventsOn('tray-start-requested', () => {
+    if (!isRunning.value && !busy.value) void startCore()
   })
-  statusTimer = window.setInterval(() => { void refreshStatus(); void refreshObservations() }, 5000)
+  stopBudgetEvents = EventsOn('traffic-budget-warning', payload => {
+    const data = payload as { used_bytes: number; budget_gb: number; used_percent: number }
+    addLog('warning', `网卡 B 流量已达到预算 ${data.used_percent.toFixed(1)}%（${formatBytes(data.used_bytes)} / ${data.budget_gb} GB）`)
+  })
+  statusTimer = window.setInterval(async () => {
+    try {
+      const [status, recovery, observed] = await Promise.all([GetCoreStatus(), GetRecoveryStatus(), GetObservations()])
+      coreStatus.value = status
+      recoveryStatus.value = recovery as RecoveryStatus
+      observations.value = normalizeObservations(observed)
+      observationsError.value = ''
+      sampleTraffic(observations.value.counters)
+    } catch (reason) { observationsError.value = messageOf(reason) }
+  }, 1000)
 })
 
-onBeforeUnmount(() => {
+onUnmounted(() => {
   stopEvents?.()
   stopRecoveryEvents?.()
-  stopBudgetEvents?.()
   stopTrayStartEvents?.()
+  stopBudgetEvents?.()
   if (statusTimer) window.clearInterval(statusTimer)
 })
 </script>
@@ -1549,7 +1565,7 @@ onBeforeUnmount(() => {
 
     <main>
       <header>
-        <div><p class="eyebrow">{{ t(selectedMode === 'proxy-split' ? 'mode.proxy' : 'mode.direct') }}</p><h1>{{ pageTitle }}</h1></div>
+        <div><p class="eyebrow">{{ t('mode.direct') }}</p><h1>{{ pageTitle }}</h1></div>
         <span class="state" :class="{ running: isRunning && !isRecovering, danger: coreStatus.abnormal || recoveryStatus.state === 'failed' }"><span aria-hidden="true">●</span>{{ stateLabel }}</span>
       </header>
 
@@ -1573,9 +1589,13 @@ onBeforeUnmount(() => {
           <button class="primary" type="button" @click="view = 'interfaces'">{{ t('overview.configure') }} <span aria-hidden="true">→</span></button>
         </section>
         <template v-else>
-          <section class="mode-row" aria-label="运行模式">
-            <div><p class="section-kicker">{{ t('overview.runMode') }}</p><strong>{{ t(selectedMode === 'proxy-split' ? 'overview.proxyRoute' : 'overview.directRoute') }}</strong></div>
-            <div class="mode-switch"><button type="button" :class="{ active: selectedMode === 'direct-split' }" @click="setMode('direct-split')">{{ t('overview.direct') }}</button><button type="button" :class="{ active: selectedMode === 'proxy-split' }" @click="setMode('proxy-split')">{{ t('overview.proxy') }}</button></div>
+          <section class="mode-row" aria-label="默认出口策略">
+            <div><p class="section-kicker">{{ t('overview.runMode') }}</p><strong>{{ defaultOutbound === 'a' ? `出口 A (${selectedAdapterA?.friendly_name ?? '网卡 A'})` : defaultOutbound === 'c' ? `出口 C (代理: ${proxyNodes.find(n => n.selected)?.name ?? '未选择'})` : `出口 B (${selectedAdapterB?.friendly_name ?? '网卡 B'})` }}</strong></div>
+            <div class="mode-switch">
+              <button type="button" :class="{ active: defaultOutbound === 'a' }" :disabled="isRunning" @click="updateDefaultOutbound('a')">默认 A</button>
+              <button type="button" :class="{ active: defaultOutbound === 'b' }" :disabled="isRunning" @click="updateDefaultOutbound('b')">默认 B</button>
+              <button type="button" :class="{ active: defaultOutbound === 'c' }" :disabled="isRunning" @click="updateDefaultOutbound('c')">默认 C (代理)</button>
+            </div>
           </section>
           <section class="control-band">
             <div><p class="section-kicker">{{ t('overview.coreControl') }}</p><h2>{{ t(isRunning ? 'overview.running' : coreStatus.abnormal ? 'overview.interrupted' : 'overview.stopped') }}</h2><p>{{ coreStatus.last_error || t(isRunning ? 'overview.runningDetail' : 'overview.stoppedDetail') }}</p></div>
@@ -1586,6 +1606,10 @@ onBeforeUnmount(() => {
             <article v-for="(adapter, role) in { A: selectedAdapterA, B: selectedAdapterB }" :key="role" class="route-row">
               <span class="route-letter">{{ role }}</span><div><h3>{{ adapter?.friendly_name }}</h3><p>{{ t(role === 'A' ? 'overview.domestic' : 'overview.public') }}</p></div>
               <dl><div><dt>{{ t('overview.status') }}</dt><dd>{{ statusText(adapter?.status ?? '') }}</dd></div><div><dt>{{ t('overview.address') }}</dt><dd>{{ adapter?.addresses?.[0]?.ip ?? t('common.none') }}</dd></div><div><dt>{{ t('overview.gateway') }}</dt><dd>{{ adapter?.gateways?.[0] ?? t('common.none') }}</dd></div></dl>
+            </article>
+            <article v-if="proxyNodes.find(n => n.selected)" class="route-row">
+              <span class="route-letter alternate">C</span><div><h3>{{ proxyNodes.find(n => n.selected)?.name }}</h3><p>代理出站（底层经出口 {{ proxyNodes.find(n => n.selected)?.egress === 'a' ? 'A' : 'B' }}）</p></div>
+              <dl><div><dt>协议</dt><dd>{{ proxyNodes.find(n => n.selected)?.type.toUpperCase() }}</dd></div><div><dt>节点地址</dt><dd>{{ proxyNodes.find(n => n.selected)?.server }}:{{ proxyNodes.find(n => n.selected)?.port }}</dd></div><div><dt>状态</dt><dd>{{ proxyTests[proxyNodes.find(n => n.selected)?.id || '']?.available ? '可用' : '活动节点' }}</dd></div></dl>
             </article>
           </section>
         </template>
@@ -1660,17 +1684,18 @@ onBeforeUnmount(() => {
         <section class="policy-strip" aria-label="当前 DNS 出口">
           <div><span>{{ selectedAdapterA?.friendly_name ?? '网卡 A' }} DNS</span><strong>{{ dnsSettings.domestic.type.toUpperCase() }} · {{ dnsSettings.domestic.server }}:{{ dnsSettings.domestic.port }}</strong></div>
           <div><span>{{ selectedAdapterB?.friendly_name ?? '网卡 B' }} DNS</span><strong>{{ dnsSettings.global.type.toUpperCase() }} · {{ dnsSettings.global.server }}:{{ dnsSettings.global.port }}</strong></div>
-          <div><span>缓存策略</span><strong>按上游独立缓存</strong></div>
+          <div><span>出口 C (代理) DNS</span><strong>{{ (dnsSettings.proxy?.type ?? dnsSettings.global.type).toUpperCase() }} · {{ dnsSettings.proxy?.server ?? dnsSettings.global.server }}:{{ dnsSettings.proxy?.port ?? dnsSettings.global.port }}</strong></div>
         </section>
         <section class="fallback-outbound" aria-label="未匹配流量兜底出口">
-          <div><strong>未匹配流量兜底出口</strong><small>未命中自定义规则的流量将从此网卡发出；指定网卡 B 的规则仍优先使用 B。</small></div>
-          <select :value="defaultOutbound" :disabled="selectedMode === 'proxy-split' || isRunning" @change="updateDefaultOutbound(($event.target as HTMLSelectElement).value as 'a' | 'b')">
-            <option value="a">网卡 A · {{ selectedAdapterA?.friendly_name ?? '未选择' }}</option>
-            <option value="b">网卡 B · {{ selectedAdapterB?.friendly_name ?? '未选择' }}</option>
+          <div><strong>未匹配流量兜底出口</strong><small>未命中自定义规则的流量将从此出口发出。</small></div>
+          <select :value="defaultOutbound" :disabled="isRunning" @change="updateDefaultOutbound(($event.target as HTMLSelectElement).value as 'a' | 'b' | 'c')">
+            <option value="a">出口 A · {{ selectedAdapterA?.friendly_name ?? '未选择' }}</option>
+            <option value="b">出口 B · {{ selectedAdapterB?.friendly_name ?? '未选择' }}</option>
+            <option value="c">出口 C · 代理出站 ({{ proxyNodes.find(n => n.selected)?.name ?? '未配置' }})</option>
           </select>
         </section>
         <section class="rules-heading">
-          <div><p class="section-kicker">按实际出口配置</p><h2>用户覆盖规则</h2><p>为 IP、域名或进程指定实际网卡；系统防环路和本地网络规则始终优先。</p></div>
+          <div><p class="section-kicker">按实际出口配置</p><h2>用户覆盖规则</h2><p>为 IP、域名、进程或 SRS 规则集指定出口；系统防环路和本地网络规则始终优先。</p></div>
           <button class="primary" type="button" @click="ruleFormOpen ? resetRuleForm() : ruleFormOpen = true">{{ ruleFormOpen ? '取消' : '添加规则' }}</button>
         </section>
         <form v-if="ruleFormOpen" class="rule-form" @submit.prevent="submitRule">
@@ -1678,7 +1703,13 @@ onBeforeUnmount(() => {
           <label>名称<input v-model.trim="ruleForm.name" required maxlength="80" placeholder="例如：阻止广告域名"></label>
           <label>匹配类型<select v-model="ruleForm.type" :disabled="Boolean(ruleForm.id)"><option value="domain-suffix">域名后缀</option><option value="domain">精确域名</option><option value="ip">IPv4 CIDR</option><option value="process-name">进程名称</option><option value="process-path">进程完整路径</option><option value="rule-set">SRS 规则集</option></select></label>
           <label v-if="ruleForm.type === 'rule-set'">来源预设<select v-model="srsForm.preset_id" @change="chooseSRSPreset"><option value="">自定义 HTTPS 地址</option><option v-for="preset in srsPresets" :key="preset.id" :value="preset.id">{{ preset.name }}</option></select></label>
-          <label>目标<select v-model="ruleForm.action"><option value="a">{{ selectedAdapterA?.friendly_name ?? '网卡 A' }}</option><option value="b">{{ selectedAdapterB?.friendly_name ?? '网卡 B' }}</option><option value="reject">拒绝</option></select></label>
+          <label>目标出口<select v-model="ruleForm.action">
+            <option value="a">出口 A · {{ selectedAdapterA?.friendly_name ?? '网卡 A' }}</option>
+            <option value="b">出口 B · {{ selectedAdapterB?.friendly_name ?? '网卡 B' }}</option>
+            <option value="c">出口 C · 代理出站</option>
+            <option value="final">跟随默认出口</option>
+            <option value="reject">阻断拒绝</option>
+          </select></label>
           <label class="toggle-label"><input v-model="ruleForm.enabled" type="checkbox"><span>启用规则</span></label>
           </div>
           <label v-if="ruleForm.type !== 'rule-set'" class="rule-form-values">匹配值（每行一个）<textarea v-model="ruleForm.valuesText" required rows="6" placeholder="每行填写一个域名、CIDR 或进程匹配值"></textarea></label>
@@ -1697,13 +1728,13 @@ onBeforeUnmount(() => {
             <template v-if="row.kind === 'custom'">
               <label class="master-rule-enabled"><input type="checkbox" :checked="row.rule.enabled" @change="toggleCustomRule(row.rule)"><span>{{ row.rule.enabled ? '启用' : '停用' }}</span></label>
               <div><strong>{{ row.rule.name }}</strong><small>{{ ruleTypeText(row.rule.type) }} · {{ row.rule.values.length }} 个值 · {{ row.rule.values.slice(0, 3).join('、') }}{{ row.rule.values.length > 3 ? '…' : '' }}</small></div>
-              <span>{{ row.rule.action === 'a' ? `网卡 A · ${selectedAdapterA?.friendly_name ?? ''}` : row.rule.action === 'b' ? `网卡 B · ${selectedAdapterB?.friendly_name ?? ''}` : row.rule.action === 'reject' ? '拒绝' : '兜底出口' }}</span>
+              <span>{{ formatRuleAction(row.rule.action) }}</span>
               <div class="proxy-actions"><button class="secondary" type="button" @click="moveMasterRule(row.key, -1)" :disabled="index === 0">上移</button><button class="secondary" type="button" @click="moveMasterRule(row.key, 1)" :disabled="index === masterRows.length - 1">下移</button><button class="secondary" type="button" @click="editCustomRule(row.rule)">编辑</button><button class="delete-button" type="button" @click="deleteCustomRule(row.rule.id)">删除</button></div>
             </template>
             <template v-else>
               <label class="master-rule-enabled"><input type="checkbox" :checked="row.source.enabled" :disabled="srsBusyID === row.source.id" @change="toggleSRSSource(row.source)"><span>{{ row.source.enabled ? '启用' : '停用' }}</span></label>
               <div><strong>{{ row.source.name }}</strong><small>{{ row.source.kind === 'domain' ? 'geosite / 域名集合' : 'geoip / IP 集合' }} · {{ row.source.applied_sha256 ? '数据集已验证' : row.source.last_error ? '下载失败，暂无缓存' : '待下载' }}</small><small>{{ formatSRSUpdatedAt(row.source) }}<template v-if="row.source.last_error && row.source.applied_sha256"> · 上次更新失败，继续使用有效缓存</template></small></div>
-              <span>{{ row.source.action === 'a' ? `网卡 A · ${selectedAdapterA?.friendly_name ?? ''}` : row.source.action === 'b' ? `网卡 B · ${selectedAdapterB?.friendly_name ?? ''}` : row.source.action === 'reject' ? '拒绝' : '兜底出口' }}</span>
+              <span>{{ formatRuleAction(row.source.action as RuleAction) }}</span>
               <div class="proxy-actions"><button class="secondary" type="button" @click="moveMasterRule(row.key, -1)" :disabled="index === 0">上移</button><button class="secondary" type="button" @click="moveMasterRule(row.key, 1)" :disabled="index === masterRows.length - 1">下移</button><button class="secondary" type="button" @click="editSRSSource(row.source)">编辑</button><button class="secondary" type="button" :disabled="srsBusyID === row.source.id" @click="refreshSRSSource(row.source)">{{ srsBusyID === row.source.id ? '校验中' : '更新' }}</button><button v-if="!row.source.preset_id" class="delete-button" type="button" @click="deleteSRSSource(row.source)">删除</button></div>
             </template>
           </article>
@@ -1737,6 +1768,21 @@ onBeforeUnmount(() => {
                 <button type="button" class="dns-test" :class="dnsTests.global" :disabled="dnsTests.global === 'testing' || dnsBusy || isRunning" @click="testDNSServer('global')">{{ dnsTests.global === 'testing' ? '测试中' : dnsTests.global === 'success' ? '成功' : dnsTests.global === 'failed' ? '失败' : '测试' }}</button>
               </div>
               <div class="dns-actions"><button type="button" class="primary" :disabled="dnsBusy || isRunning" @click="saveDNSSettings">{{ dnsBusy ? '正在校验' : '保存 B DNS' }}</button></div>
+            </details>
+          </article>
+          <article class="outlet-rule-group">
+            <header><span>出口 C DNS</span><h3>{{ proxyNodes.find(n => n.selected)?.name ?? '代理出站' }}</h3><small>管理该代理出口使用的域名解析服务</small></header>
+            <details class="outlet-dns-settings">
+              <summary class="outlet-dns-heading"><strong>出口 C DNS</strong><small>{{ (dnsSettings.proxy?.type ?? 'udp').toUpperCase() }} · {{ dnsSettings.proxy?.server ?? '8.8.8.8' }}:{{ dnsSettings.proxy?.port ?? 53 }}</small></summary>
+              <div v-if="dnsSettings.proxy" class="dns-row">
+                <label>DNS 预设<select v-model="dnsSettings.proxy.preset_id" :disabled="dnsBusy" @change="dnsSettings.proxy.preset_id ? chooseDNSPreset('proxy') : setCustomDNS('proxy')"><option value="">自定义</option><option v-for="preset in dnsPresets.filter(item => item.scope === 'proxy' || item.scope === 'global')" :key="preset.id" :value="preset.id">{{ preset.name }}</option></select></label>
+                <label>协议<select v-model="dnsSettings.proxy.type" :disabled="dnsBusy || Boolean(dnsSettings.proxy.preset_id)" @change="setCustomDNS('proxy')"><option value="udp">UDP</option><option value="tls">DoT</option><option value="https">DoH</option></select></label>
+                <label>服务器 IP<input v-model.trim="dnsSettings.proxy.server" required :readonly="Boolean(dnsSettings.proxy.preset_id)" placeholder="8.8.8.8" @input="setCustomDNS('proxy')"></label>
+                <label>端口<input v-model.number="dnsSettings.proxy.port" type="number" min="1" max="65535" required :readonly="Boolean(dnsSettings.proxy.preset_id)" @input="setCustomDNS('proxy')"></label>
+                <label :class="{ 'dns-field-placeholder': dnsSettings.proxy.type === 'udp' }">TLS 域名<input v-model.trim="dnsSettings.proxy.server_name" :required="dnsSettings.proxy.type !== 'udp'" :disabled="dnsSettings.proxy.type === 'udp'" :readonly="Boolean(dnsSettings.proxy.preset_id)" :placeholder="dnsSettings.proxy.type === 'udp' ? 'UDP 不需要' : 'dns.example.com'" @input="setCustomDNS('proxy')"></label>
+                <button type="button" class="dns-test" :class="dnsTests.proxy" :disabled="dnsTests.proxy === 'testing' || dnsBusy || isRunning" @click="testDNSServer('proxy')">{{ dnsTests.proxy === 'testing' ? '测试中' : dnsTests.proxy === 'success' ? '成功' : dnsTests.proxy === 'failed' ? '失败' : '测试' }}</button>
+              </div>
+              <div class="dns-actions"><button type="button" class="primary" :disabled="dnsBusy || isRunning" @click="saveDNSSettings">{{ dnsBusy ? '正在校验' : '保存 C DNS' }}</button></div>
             </details>
           </article>
         </section>

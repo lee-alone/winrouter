@@ -71,7 +71,6 @@ type ApplicationStatus struct {
 	Name        string `json:"name"`
 	Version     string `json:"version"`
 	Commit      string `json:"commit"`
-	Mode        string `json:"mode"`
 	CoreVersion string `json:"coreVersion"`
 	Ready       bool   `json:"ready"`
 }
@@ -275,7 +274,7 @@ func (a *App) Startup(ctx context.Context) {
 	go a.monitorCoreRuntime(ctx)
 }
 func (a *App) GetStatus() ApplicationStatus {
-	return ApplicationStatus{Name: "WinRouter", Version: buildinfo.Version, Commit: buildinfo.Commit, Mode: "direct-split", CoreVersion: buildinfo.CoreVersion, Ready: false}
+	return ApplicationStatus{Name: "WinRouter", Version: buildinfo.Version, Commit: buildinfo.Commit, CoreVersion: buildinfo.CoreVersion, Ready: false}
 }
 
 func (a *App) GetApplicationConfigDirectory() string {
@@ -530,12 +529,25 @@ func (a *App) TestProxyNode(id, dnsServer string) (nodes.TestResult, error) {
 	return result, nil
 }
 
-func (a *App) ValidateSelectedProxyConfiguration(input config.MVPConfig) error {
-	enriched, err := a.withSelectedProxy(input)
-	if err != nil {
-		return err
+func requiresProxy(input config.MVPConfig) bool {
+	if input.DefaultOutbound == "c" {
+		return true
 	}
-	return a.ValidateCoreConfiguration(enriched)
+	for _, rule := range input.CustomRules {
+		if rule.Action == "c" {
+			return true
+		}
+	}
+	for _, ruleSet := range input.RuleSets {
+		if ruleSet.Action == "c" {
+			return true
+		}
+	}
+	return false
+}
+
+func (a *App) ValidateSelectedProxyConfiguration(input config.MVPConfig) error {
+	return a.ValidateCoreConfiguration(input)
 }
 
 func (a *App) PreviewCoreRules(input config.MVPConfig) ([]config.RulePreview, error) {
@@ -548,11 +560,9 @@ func (a *App) PreviewCoreRules(input config.MVPConfig) ([]config.RulePreview, er
 	if err != nil {
 		return nil, err
 	}
-	if input.Mode == config.ModeProxySplit {
-		input, err = a.withSelectedProxy(input)
-		if err != nil {
-			return nil, err
-		}
+	input, err = a.withSelectedProxy(input)
+	if err != nil {
+		return nil, err
 	}
 	input, err = a.withSRSRuleSets(input)
 	if err != nil {
@@ -572,24 +582,23 @@ func (a *App) InspectProcessRules(input config.MVPConfig) ([]processrules.Status
 }
 
 func (a *App) ApplySelectedProxyConfiguration(input config.MVPConfig) (core.Status, error) {
-	enriched, err := a.withSelectedProxy(input)
-	if err != nil {
-		return core.Status{}, err
-	}
-	return a.ApplyCoreConfiguration(enriched)
+	return a.ApplyCoreConfiguration(input)
 }
 
 func (a *App) withSelectedProxy(input config.MVPConfig) (config.MVPConfig, error) {
-	if input.Mode != config.ModeProxySplit {
-		return config.MVPConfig{}, errors.New("selected proxy configuration requires proxy-split mode")
-	}
 	store, err := a.getNodeStore()
 	if err != nil {
-		return config.MVPConfig{}, err
+		if requiresProxy(input) {
+			return config.MVPConfig{}, err
+		}
+		return input, nil
 	}
 	node, credentials, err := store.SelectedCredentials()
 	if err != nil {
-		return config.MVPConfig{}, err
+		if requiresProxy(input) {
+			return config.MVPConfig{}, errors.New("selected proxy configuration is required when default outbound or rules target proxy (c)")
+		}
+		return input, nil
 	}
 	egress := node.Egress
 	if egress == "" {
@@ -1010,6 +1019,10 @@ func (a *App) ValidateCoreConfiguration(input config.MVPConfig) error {
 	if err != nil {
 		return err
 	}
+	input, err = a.withSelectedProxy(input)
+	if err != nil {
+		return err
+	}
 	if statuses, inspectErr := a.InspectProcessRules(input); inspectErr != nil {
 		return inspectErr
 	} else {
@@ -1052,6 +1065,10 @@ func (a *App) ApplyCoreConfiguration(input config.MVPConfig) (core.Status, error
 		return core.Status{}, err
 	}
 	input, err = a.withDNSSettings(input)
+	if err != nil {
+		return core.Status{}, err
+	}
+	input, err = a.withSelectedProxy(input)
 	if err != nil {
 		return core.Status{}, err
 	}
@@ -1648,6 +1665,9 @@ func (a *App) withDNSSettings(input config.MVPConfig) (config.MVPConfig, error) 
 	input.DNS = config.MVPDNS{
 		Domestic: config.MVPDNSServer{Type: settings.Domestic.Type, Server: settings.Domestic.Server, Port: settings.Domestic.Port, ServerName: settings.Domestic.ServerName},
 		Global:   config.MVPDNSServer{Type: settings.Global.Type, Server: settings.Global.Server, Port: settings.Global.Port, ServerName: settings.Global.ServerName},
+	}
+	if settings.Proxy != nil && settings.Proxy.Server != "" {
+		input.DNS.Proxy = &config.MVPDNSServer{Type: settings.Proxy.Type, Server: settings.Proxy.Server, Port: settings.Proxy.Port, ServerName: settings.Proxy.ServerName}
 	}
 	return input, nil
 }

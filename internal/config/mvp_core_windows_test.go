@@ -118,7 +118,7 @@ func TestGeneratedShadowsocksProxyPassesLockedSingBoxCheck(t *testing.T) {
 		t.Skip("skipping locked core integration check")
 	}
 	input := fixtureInput(t)
-	input.Mode = ModeProxySplit
+	input.DefaultOutbound = "c"
 	input.Proxy = &MVPProxy{Type: "shadowsocks", Server: "37.19.198.244", Port: 443, Method: "aes-128-gcm", Password: "shadowsocks"}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
@@ -136,7 +136,7 @@ func TestGeneratedVMessProxyPassesLockedSingBoxCheck(t *testing.T) {
 		t.Skip("skipping locked core integration check")
 	}
 	input := fixtureInput(t)
-	input.Mode = ModeProxySplit
+	input.DefaultOutbound = "c"
 	input.Proxy = &MVPProxy{
 		Type:      "vmess",
 		Server:    "203.0.113.88",
@@ -161,7 +161,7 @@ func TestGeneratedVLESSProxyPassesLockedSingBoxCheck(t *testing.T) {
 		t.Skip("skipping locked core integration check")
 	}
 	input := fixtureInput(t)
-	input.Mode = ModeProxySplit
+	input.DefaultOutbound = "c"
 	input.Proxy = &MVPProxy{
 		Type:      "vless",
 		Server:    "203.0.113.89",
@@ -186,7 +186,7 @@ func TestGeneratedTrojanProxyPassesLockedSingBoxCheck(t *testing.T) {
 		t.Skip("skipping locked core integration check")
 	}
 	input := fixtureInput(t)
-	input.Mode = ModeProxySplit
+	input.DefaultOutbound = "c"
 	input.Proxy = &MVPProxy{
 		Type:     "trojan",
 		Server:   "203.0.113.90",
@@ -210,7 +210,7 @@ func TestGeneratedProxyEgressAPassesLockedSingBoxCheck(t *testing.T) {
 		t.Skip("skipping locked core integration check")
 	}
 	input := fixtureInput(t)
-	input.Mode = ModeProxySplit
+	input.DefaultOutbound = "c"
 	input.Proxy = &MVPProxy{
 		Type:     "trojan",
 		Server:   "203.0.113.91",

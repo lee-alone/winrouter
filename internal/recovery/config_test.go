@@ -45,8 +45,8 @@ func TestRebuildConfigRejectsUnavailableSnapshot(t *testing.T) {
 
 func validConfig() config.MVPConfig {
 	return config.MVPConfig{
-		SchemaVersion: config.SchemaVersion1, Mode: config.ModeDirectSplit,
-		TUN:        config.MVPTUN{Prefix: "172.19.0.0/30", Stack: "system"},
+		SchemaVersion: config.SchemaVersion1,
+		TUN:           config.MVPTUN{Prefix: "172.19.0.0/30", Stack: "system"},
 		InterfaceA: config.MVPInterface{GUID: "{A}", BindInterface: "Wi-Fi"},
 		InterfaceB: config.MVPInterface{GUID: "{B}", BindInterface: "Ethernet"},
 		Domestic:   config.MVPDomestic{CIDRs: []string{"1.0.1.0/24"}, DomainSuffixes: []string{"cn"}},

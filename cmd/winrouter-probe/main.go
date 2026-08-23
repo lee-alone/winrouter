@@ -154,8 +154,8 @@ func main() {
 					os.Exit(1)
 				}
 				input := config.MVPConfig{
-					SchemaVersion: config.SchemaVersion1, Mode: config.ModeDirectSplit,
-					TUN:        config.MVPTUN{Prefix: allocation.Prefix, Stack: *stack},
+					SchemaVersion: config.SchemaVersion1,
+					TUN:           config.MVPTUN{Prefix: allocation.Prefix, Stack: *stack},
 					InterfaceA: config.MVPInterface{GUID: candidates[0].GUID, BindInterface: candidates[0].FriendlyName},
 					InterfaceB: config.MVPInterface{GUID: candidates[1].GUID, BindInterface: candidates[1].FriendlyName},
 					Domestic:   config.MVPDomestic{CIDRs: []string{"223.5.5.5/32"}, DomainSuffixes: []string{"baidu.com"}},
@@ -438,7 +438,6 @@ func activeCandidates(adapters []interfaces.Adapter) []interfaces.Adapter {
 func processExperimentInput(prefix, stack string, candidates []interfaces.Adapter, rule config.MVPCustomRule) config.MVPConfig {
 	input := config.MVPConfig{
 		SchemaVersion: config.SchemaVersion1,
-		Mode:          config.ModeDirectSplit,
 		TUN:           config.MVPTUN{Prefix: prefix, Stack: stack},
 		InterfaceA:    config.MVPInterface{GUID: candidates[0].GUID, BindInterface: candidates[0].FriendlyName},
 		InterfaceB:    config.MVPInterface{GUID: candidates[1].GUID, BindInterface: candidates[1].FriendlyName},

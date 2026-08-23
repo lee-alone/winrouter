@@ -51,7 +51,7 @@ func ValidateGeneratedSchema(data []byte) error {
 	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
 		return &ValidationError{Stage: StageSchema, Err: errors.New("generated output has trailing JSON data")}
 	}
-	if len(model.Inbounds) != 1 || len(model.Outbounds) < 3 || len(model.DNS.Servers) != 2 || len(model.Route.Rules) == 0 || model.Route.Final == "" {
+	if len(model.Inbounds) != 1 || len(model.Outbounds) < 3 || len(model.DNS.Servers) < 2 || len(model.Route.Rules) == 0 || model.Route.Final == "" {
 		return &ValidationError{Stage: StageSchema, Err: errors.New("generated output is missing required MVP fields")}
 	}
 	return nil
@@ -59,15 +59,8 @@ func ValidateGeneratedSchema(data []byte) error {
 
 func ValidateMVPSemantics(generated Generated) error {
 	model := generated.Model
-	expectedFinal := "foreign-direct"
-	if generated.Mode == ModeProxySplit {
-		expectedFinal = "proxy"
-	}
-	if generated.Mode == ModeDirectSplit && model.Route.Final != "foreign-direct" && model.Route.Final != "domestic-direct" {
-		return semanticError("%s route.final must be a direct outbound", generated.Mode)
-	}
-	if generated.Mode != ModeDirectSplit && model.Route.Final != expectedFinal {
-		return semanticError("%s route.final must be %s", generated.Mode, expectedFinal)
+	if model.Route.Final != "domestic-direct" && model.Route.Final != "foreign-direct" && model.Route.Final != "proxy" {
+		return semanticError("route.final must be domestic-direct, foreign-direct, or proxy")
 	}
 	tags := make(map[string]struct{}, len(model.Outbounds))
 	for _, outbound := range model.Outbounds {
@@ -82,14 +75,14 @@ func ValidateMVPSemantics(generated Generated) error {
 	if _, ok := tags[model.Route.Final]; !ok {
 		return semanticError("route.final references missing outbound %q", model.Route.Final)
 	}
-	if generated.Mode == ModeProxySplit {
-		var proxy *Outbound
-		for index := range model.Outbounds {
-			if model.Outbounds[index].Tag == "proxy" {
-				proxy = &model.Outbounds[index]
-			}
+	var proxy *Outbound
+	for index := range model.Outbounds {
+		if model.Outbounds[index].Tag == "proxy" {
+			proxy = &model.Outbounds[index]
 		}
-		if proxy == nil || proxy.BindInterface != generated.ProxyBindInterface || proxy.Server == "" || proxy.ServerPort == 0 {
+	}
+	if proxy != nil {
+		if proxy.BindInterface != generated.ProxyBindInterface || proxy.Server == "" || proxy.ServerPort == 0 {
 			return semanticError("proxy outbound must be complete and correctly bound")
 		}
 		switch proxy.Type {
@@ -145,8 +138,10 @@ func ValidateMVPSemantics(generated Generated) error {
 		}
 	}
 	expectedDNSFinal := "dns-global"
-	if generated.Mode == ModeDirectSplit && generated.Model.Route.Final == "domestic-direct" {
+	if generated.Model.Route.Final == "domestic-direct" {
 		expectedDNSFinal = "dns-domestic"
+	} else if generated.Model.Route.Final == "proxy" {
+		expectedDNSFinal = "dns-proxy"
 	}
 	if !model.DNS.IndependentCache || (model.DNS.Strategy != "ipv4_only" && model.DNS.Strategy != "prefer_ipv4") || model.DNS.Final != expectedDNSFinal {
 		return semanticError("DNS cache isolation, strategy, or final server is invalid")

@@ -328,7 +328,7 @@ func validateSource(source Source) error {
 	if source.Kind != "domain" && source.Kind != "ip" {
 		return errors.New("SRS kind must be domain or ip")
 	}
-	if source.Action != "a" && source.Action != "b" && source.Action != "final" && source.Action != "reject" {
+	if source.Action != "a" && source.Action != "b" && source.Action != "c" && source.Action != "final" && source.Action != "reject" {
 		return errors.New("unsupported SRS action")
 	}
 	parsed, err := url.Parse(source.URL)

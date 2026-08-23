@@ -4,22 +4,22 @@
   "title": "WinRouter configuration v1",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema_version", "mode", "tun", "interface_a", "interface_b", "direct_prefixes", "domestic", "dns", "ipv6"],
+  "required": ["schema_version", "tun", "interface_a", "interface_b", "direct_prefixes", "domestic", "dns", "ipv6"],
   "properties": {
     "schema_version": { "const": 1 },
-    "mode": { "enum": ["direct-split", "proxy-split"] },
     "tun": {
       "type": "object",
       "additionalProperties": false,
       "required": ["prefix", "stack"],
       "properties": {
         "prefix": { "type": "string" },
+        "ipv6_prefix": { "type": "string" },
         "stack": { "enum": ["system", "gvisor", "mixed"] }
       }
     },
     "interface_a": { "$ref": "#/$defs/interface" },
     "interface_b": { "$ref": "#/$defs/interface" },
-    "default_outbound": { "enum": ["a", "b"] },
+    "default_outbound": { "enum": ["a", "b", "c"] },
     "direct_prefixes": {
       "type": "array",
       "items": {
@@ -42,9 +42,9 @@
         "properties": {
           "id": { "type": "string" },
           "name": { "type": "string", "minLength": 1, "maxLength": 80 },
-          "type": { "enum": ["domain", "ip", "process-name", "process-path"] },
+          "type": { "enum": ["domain", "domain-suffix", "ip", "process-name", "process-path"] },
           "value": { "type": "string", "minLength": 1 },
-          "action": { "enum": ["a", "b", "final", "reject"] }
+          "action": { "enum": ["a", "b", "c", "final", "reject"] }
         }
       }
     },
@@ -58,7 +58,7 @@
         "properties": {
           "tag": { "type": "string", "minLength": 1 },
           "kind": { "enum": ["domain", "ip"] },
-          "action": { "enum": ["a", "b", "final", "reject"] },
+          "action": { "enum": ["a", "b", "c", "final", "reject"] },
           "path": { "type": "string", "minLength": 1 }
         }
       }
@@ -78,17 +78,13 @@
       "required": ["domestic", "global"],
       "properties": {
         "domestic": { "$ref": "#/$defs/dns" },
-        "global": { "$ref": "#/$defs/dns" }
+        "global": { "$ref": "#/$defs/dns" },
+        "proxy": { "$ref": "#/$defs/dns" }
       }
     },
     "proxy": { "$ref": "#/$defs/proxy" },
     "ipv6": { "enum": ["block", "split"] }
   },
-  "allOf": [{
-    "if": { "properties": { "mode": { "const": "proxy-split" } } },
-    "then": { "required": ["proxy"] },
-    "else": { "not": { "required": ["proxy"] } }
-  }],
   "$defs": {
     "interface": {
       "type": "object",

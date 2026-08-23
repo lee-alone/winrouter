@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"winrouter/internal/dnssettings"
@@ -29,7 +30,7 @@ func TestRebuildApplicationSettingsReplacesInvalidFiles(t *testing.T) {
 		t.Fatalf("rule defaults were not rebuilt: %#v, %v", rules, err)
 	}
 	dns, err := dnssettings.New(filepath.Join(directory, "dns-settings.json"))
-	if err != nil || dns.Get() != dnssettings.Defaults() {
+	if err != nil || !reflect.DeepEqual(dns.Get(), dnssettings.Defaults()) {
 		t.Fatalf("DNS defaults = %#v, %v", dns, err)
 	}
 }

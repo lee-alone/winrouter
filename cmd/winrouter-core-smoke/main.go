@@ -79,8 +79,8 @@ func main() {
 		fail(err)
 	}
 	input := config.MVPConfig{
-		SchemaVersion: config.SchemaVersion1, Mode: config.ModeDirectSplit,
-		TUN:        config.MVPTUN{Prefix: allocation.Prefix, Stack: config.TUNStackSystem},
+		SchemaVersion: config.SchemaVersion1,
+		TUN:           config.MVPTUN{Prefix: allocation.Prefix, Stack: config.TUNStackSystem},
 		InterfaceA: config.MVPInterface{GUID: candidates[0].GUID, BindInterface: candidates[0].FriendlyName},
 		InterfaceB: config.MVPInterface{GUID: candidates[1].GUID, BindInterface: candidates[1].FriendlyName},
 		Domestic:   config.MVPDomestic{CIDRs: []string{"1.0.1.0/24"}, DomainSuffixes: []string{"example.cn"}},

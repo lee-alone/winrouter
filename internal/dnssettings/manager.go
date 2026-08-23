@@ -22,9 +22,10 @@ type Server struct {
 }
 
 type Settings struct {
-	SchemaVersion int    `json:"schema_version"`
-	Domestic      Server `json:"domestic"`
-	Global        Server `json:"global"`
+	SchemaVersion int     `json:"schema_version"`
+	Domestic      Server  `json:"domestic"`
+	Global        Server  `json:"global"`
+	Proxy         *Server `json:"proxy,omitempty"`
 }
 
 type Preset struct {
@@ -45,12 +46,19 @@ var presets = []Preset{
 	{ID: "google-doh", Name: "Google DoH", Scope: "global", Type: "https", Server: "8.8.8.8", Port: 443, ServerName: "dns.google"},
 	{ID: "cloudflare-dot", Name: "Cloudflare DoT", Scope: "global", Type: "tls", Server: "1.1.1.1", Port: 853, ServerName: "cloudflare-dns.com"},
 	{ID: "cloudflare-doh", Name: "Cloudflare DoH", Scope: "global", Type: "https", Server: "1.1.1.1", Port: 443, ServerName: "cloudflare-dns.com"},
+	{ID: "proxy-google-udp", Name: "Google UDP", Scope: "proxy", Type: "udp", Server: "8.8.8.8", Port: 53},
+	{ID: "proxy-google-doh", Name: "Google DoH", Scope: "proxy", Type: "https", Server: "8.8.8.8", Port: 443, ServerName: "dns.google"},
+	{ID: "proxy-cloudflare-dot", Name: "Cloudflare DoT", Scope: "proxy", Type: "tls", Server: "1.1.1.1", Port: 853, ServerName: "cloudflare-dns.com"},
+	{ID: "proxy-cloudflare-doh", Name: "Cloudflare DoH", Scope: "proxy", Type: "https", Server: "1.1.1.1", Port: 443, ServerName: "cloudflare-dns.com"},
 }
 
 func Defaults() Settings {
-	return Settings{SchemaVersion: SchemaVersion,
-		Domestic: Server{PresetID: "aliyun-udp", Type: "udp", Server: "223.5.5.5", Port: 53},
-		Global:   Server{PresetID: "google-udp", Type: "udp", Server: "8.8.8.8", Port: 53}}
+	return Settings{
+		SchemaVersion: SchemaVersion,
+		Domestic:      Server{PresetID: "aliyun-udp", Type: "udp", Server: "223.5.5.5", Port: 53},
+		Global:        Server{PresetID: "google-udp", Type: "udp", Server: "8.8.8.8", Port: 53},
+		Proxy:         &Server{PresetID: "proxy-google-udp", Type: "udp", Server: "8.8.8.8", Port: 53},
+	}
 }
 
 func Presets() []Preset { return append([]Preset(nil), presets...) }
@@ -73,10 +81,6 @@ func New(path string) (*Manager, error) {
 	var stored Settings
 	if err := json.Unmarshal(data, &stored); err != nil {
 		return nil, fmt.Errorf("decode DNS settings: %w", err)
-	}
-	// Schema 0 represents the historical fixed defaults and migrates without data loss.
-	if stored.SchemaVersion == 0 {
-		stored.SchemaVersion = SchemaVersion
 	}
 	if err := Validate(stored); err != nil {
 		return nil, err
@@ -119,6 +123,11 @@ func Validate(value Settings) error {
 	}
 	if err := validateServer("global", value.Global); err != nil {
 		return err
+	}
+	if value.Proxy != nil && value.Proxy.Server != "" {
+		if err := validateServer("proxy", *value.Proxy); err != nil {
+			return err
+		}
 	}
 	if value.Domestic.Type == value.Global.Type && value.Domestic.Server == value.Global.Server && value.Domestic.Port == value.Global.Port && strings.EqualFold(value.Domestic.ServerName, value.Global.ServerName) {
 		return errors.New("domestic and global DNS upstreams must not be identical")
