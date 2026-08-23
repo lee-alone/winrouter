@@ -74,11 +74,18 @@ func parseTrojanURI(value string) (nodes.Input, error) {
 		host := query.Get("host")
 		transportInput = &nodes.TransportInput{
 			Type: "ws",
-			Path: path,
-			Host: host,
+			Path: normalizePath(path),
+			Host: strings.TrimSpace(host),
 		}
 	case "tcp", "":
-		// standard TCP
+		if path := query.Get("path"); path != "" {
+			host := query.Get("host")
+			transportInput = &nodes.TransportInput{
+				Type: "ws",
+				Path: normalizePath(path),
+				Host: strings.TrimSpace(host),
+			}
+		}
 	default:
 		return nodes.Input{}, fmt.Errorf("unsupported Trojan transport type %q (only tcp and ws are supported)", transportType)
 	}

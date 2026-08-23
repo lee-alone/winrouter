@@ -63,6 +63,13 @@ func parseVMessURI(value string) (nodes.Input, error) {
 
 	name := normalizeName(data.PS, "VMess")
 
+	if data.Aid != nil {
+		aidNum, err := parseAlterID(data.Aid)
+		if err != nil || aidNum != 0 {
+			return nodes.Input{}, fmt.Errorf("unsupported VMess alterId %v (only alterId=0 / AEAD is supported)", data.Aid)
+		}
+	}
+
 	typeLower := strings.ToLower(strings.TrimSpace(data.Type))
 	switch typeLower {
 	case "", "none", "tcp":
@@ -73,7 +80,7 @@ func parseVMessURI(value string) (nodes.Input, error) {
 	var tlsInput *nodes.TLSInput
 	tlsLower := strings.ToLower(strings.TrimSpace(data.TLS))
 	switch tlsLower {
-	case "tls", "1", "true":
+	case "tls", "1", "true", "ssl":
 		var alpn []string
 		if strings.TrimSpace(data.ALPN) != "" {
 			for _, item := range strings.Split(data.ALPN, ",") {
@@ -106,11 +113,17 @@ func parseVMessURI(value string) (nodes.Input, error) {
 	case "ws", "websocket":
 		transportInput = &nodes.TransportInput{
 			Type: "ws",
-			Path: strings.TrimSpace(data.Path),
+			Path: normalizePath(data.Path),
 			Host: strings.TrimSpace(data.Host),
 		}
 	case "tcp", "":
-		// standard TCP
+		if data.Path != "" {
+			transportInput = &nodes.TransportInput{
+				Type: "ws",
+				Path: normalizePath(data.Path),
+				Host: strings.TrimSpace(data.Host),
+			}
+		}
 	default:
 		return nodes.Input{}, fmt.Errorf("unsupported VMess network type %q (only tcp and ws are supported)", data.Net)
 	}

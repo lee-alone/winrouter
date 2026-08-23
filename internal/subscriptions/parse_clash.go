@@ -38,6 +38,10 @@ type clashProxy struct {
 	Plugin         string            `yaml:"plugin"`
 	PluginOpts     any               `yaml:"plugin-opts"`
 	UDP            any               `yaml:"udp"`
+	RealityOpts    any               `yaml:"reality-opts"`
+	GRPCOpts       any               `yaml:"grpc-opts"`
+	H2Opts         any               `yaml:"h2-opts"`
+	HTTPOpts       any               `yaml:"http-opts"`
 }
 
 type clashWSOpts struct {
@@ -76,6 +80,8 @@ func validateYAMLNodeTree(node *yaml.Node, currentDepth int, nodeCount, aliasCou
 	return nil
 }
 
+
+
 var allowedClashProxyKeys = map[string]bool{
 	"name":             true,
 	"type":             true,
@@ -99,14 +105,12 @@ var allowedClashProxyKeys = map[string]bool{
 	"ws-opts":          true,
 	"ws-path":          true,
 	"ws-headers":       true,
-	"plugin":           true,
-	"plugin-opts":      true,
 	"udp":              true,
 }
 
-func validateClashProxiesAST(root *yaml.Node) error {
+func findProxiesSeq(root *yaml.Node) (*yaml.Node, error) {
 	if root == nil {
-		return nil
+		return nil, errors.New("nil YAML root")
 	}
 	var docMap *yaml.Node
 	if root.Kind == yaml.DocumentNode && len(root.Content) > 0 {
@@ -115,74 +119,51 @@ func validateClashProxiesAST(root *yaml.Node) error {
 		docMap = root
 	}
 	if docMap == nil || docMap.Kind != yaml.MappingNode {
-		return errors.New("root of Clash YAML must be a mapping")
+		return nil, errors.New("root of Clash YAML must be a mapping")
 	}
 
-	var proxiesSeq *yaml.Node
 	for i := 0; i < len(docMap.Content); i += 2 {
 		keyNode := docMap.Content[i]
 		key := strings.ToLower(strings.TrimSpace(keyNode.Value))
 		if key == "proxies" {
-			proxiesSeq = docMap.Content[i+1]
-			continue
+			proxiesSeq := docMap.Content[i+1]
+			for proxiesSeq.Kind == yaml.AliasNode {
+				proxiesSeq = proxiesSeq.Alias
+			}
+			if proxiesSeq.Kind != yaml.SequenceNode {
+				return nil, errors.New("proxies section must be a list")
+			}
+			return proxiesSeq, nil
 		}
-		return fmt.Errorf("unsupported Clash top-level field %q; only proxies can be imported", keyNode.Value)
 	}
-	if proxiesSeq == nil {
-		return errors.New("YAML contains no proxies section")
-	}
-	for proxiesSeq.Kind == yaml.AliasNode {
-		proxiesSeq = proxiesSeq.Alias
-	}
-	if proxiesSeq.Kind != yaml.SequenceNode {
-		return errors.New("proxies section must be a list")
-	}
+	return nil, errors.New("YAML contains no proxies section")
+}
 
-	for idx, proxyNode := range proxiesSeq.Content {
-		actual := proxyNode
-		for actual.Kind == yaml.AliasNode {
-			actual = actual.Alias
+func validateProxyNodeAST(proxyNode *yaml.Node) error {
+	actual := proxyNode
+	for actual.Kind == yaml.AliasNode {
+		actual = actual.Alias
+	}
+	if actual.Kind != yaml.MappingNode {
+		return errors.New("proxy entry must be a YAML mapping")
+	}
+	for j := 0; j < len(actual.Content); j += 2 {
+		kNode := actual.Content[j]
+		vNode := actual.Content[j+1]
+		key := strings.ToLower(strings.TrimSpace(kNode.Value))
+		if !allowedClashProxyKeys[key] {
+			return fmt.Errorf("unsupported or unknown proxy field %q", kNode.Value)
 		}
-		if actual.Kind != yaml.MappingNode {
-			return fmt.Errorf("proxy node %d: entry must be a YAML mapping", idx+1)
-		}
-		for j := 0; j < len(actual.Content); j += 2 {
-			kNode := actual.Content[j]
-			vNode := actual.Content[j+1]
-			key := strings.ToLower(strings.TrimSpace(kNode.Value))
-			if !allowedClashProxyKeys[key] {
-				return fmt.Errorf("proxy node %d: unsupported or unknown field %q", idx+1, kNode.Value)
+		if key == "ws-opts" && vNode != nil {
+			wsActual := vNode
+			for wsActual.Kind == yaml.AliasNode {
+				wsActual = wsActual.Alias
 			}
-			if key == "alterid" || key == "alter-id" || key == "alter_id" {
-				if vNode != nil && strings.TrimSpace(vNode.Value) != "0" {
-					return fmt.Errorf("proxy node %d: unsupported alterId %q (only alterId=0 / AEAD is supported)", idx+1, vNode.Value)
-				}
-			}
-			if key == "plugin" || key == "plugin-opts" || key == "plugin_opts" {
-				if vNode != nil && (strings.TrimSpace(vNode.Value) != "" || len(vNode.Content) > 0) {
-					return fmt.Errorf("proxy node %d: plugins (%s) are not supported in Clash YAML", idx+1, kNode.Value)
-				}
-			}
-			if key == "udp" && vNode != nil {
-				udpVal := strings.ToLower(strings.TrimSpace(vNode.Value))
-				if udpVal == "false" || udpVal == "0" {
-					return fmt.Errorf("proxy node %d: udp=false is not supported because per-node UDP disabling cannot be represented", idx+1)
-				}
-				if udpVal != "true" && udpVal != "1" {
-					return fmt.Errorf("proxy node %d: invalid udp boolean value %q", idx+1, vNode.Value)
-				}
-			}
-			if key == "ws-opts" && vNode != nil {
-				wsActual := vNode
-				for wsActual.Kind == yaml.AliasNode {
-					wsActual = wsActual.Alias
-				}
-				if wsActual.Kind == yaml.MappingNode {
-					for w := 0; w < len(wsActual.Content); w += 2 {
-						wKey := strings.ToLower(strings.TrimSpace(wsActual.Content[w].Value))
-						if wKey != "path" && wKey != "headers" {
-							return fmt.Errorf("proxy node %d: unsupported ws-opts field %q (only path and headers are supported)", idx+1, wsActual.Content[w].Value)
-						}
+			if wsActual.Kind == yaml.MappingNode {
+				for w := 0; w < len(wsActual.Content); w += 2 {
+					wKey := strings.ToLower(strings.TrimSpace(wsActual.Content[w].Value))
+					if wKey != "path" && wKey != "headers" {
+						return fmt.Errorf("unsupported ws-opts field %q (only path and headers are supported)", wsActual.Content[w].Value)
 					}
 				}
 			}
@@ -192,8 +173,8 @@ func validateClashProxiesAST(root *yaml.Node) error {
 }
 
 func parseClashYAML(data []byte) ([]nodes.Input, error) {
-	if len(data) > 1024*1024 {
-		return nil, errors.New("YAML configuration exceeds 1MB limit")
+	if len(data) > 10*1024*1024 {
+		return nil, errors.New("YAML configuration exceeds 10MB limit")
 	}
 
 	var root yaml.Node
@@ -207,29 +188,41 @@ func parseClashYAML(data []byte) ([]nodes.Input, error) {
 		return nil, fmt.Errorf("security check failed: %w", err)
 	}
 
-	if err := validateClashProxiesAST(&root); err != nil {
+	proxiesSeq, err := findProxiesSeq(&root)
+	if err != nil {
 		return nil, err
 	}
-
-	var config clashConfig
-	if err := root.Decode(&config); err != nil {
-		return nil, fmt.Errorf("invalid Clash YAML structure: %w", err)
-	}
-
-	if len(config.Proxies) == 0 {
+	if len(proxiesSeq.Content) == 0 {
 		return nil, errors.New("YAML contains no proxies")
 	}
-	if len(config.Proxies) > 500 {
+	if len(proxiesSeq.Content) > 500 {
 		return nil, errors.New("subscription must contain 1 to 500 nodes")
 	}
 
-	result := make([]nodes.Input, 0, len(config.Proxies))
-	for index, p := range config.Proxies {
+	result := make([]nodes.Input, 0, len(proxiesSeq.Content))
+	var lastErr error
+	for idx, proxyNode := range proxiesSeq.Content {
+		if err := validateProxyNodeAST(proxyNode); err != nil {
+			lastErr = fmt.Errorf("proxy node %d: %w", idx+1, err)
+			continue
+		}
+		var p clashProxy
+		if err := proxyNode.Decode(&p); err != nil {
+			lastErr = fmt.Errorf("proxy node %d: %w", idx+1, err)
+			continue
+		}
 		item, err := mapClashProxy(p)
 		if err != nil {
-			return nil, fmt.Errorf("proxy node %d (%q): %w", index+1, p.Name, err)
+			lastErr = fmt.Errorf("proxy node %d (%q): %w", idx+1, p.Name, err)
+			continue
 		}
 		result = append(result, item)
+	}
+	if len(result) == 0 {
+		if lastErr != nil {
+			return nil, fmt.Errorf("all Clash proxies failed to parse: %w", lastErr)
+		}
+		return nil, errors.New("no valid proxies found in Clash YAML")
 	}
 	return result, nil
 }
@@ -275,6 +268,26 @@ func mapClashProxy(p clashProxy) (nodes.Input, error) {
 		return nodes.Input{}, errors.New("plugins (plugin / plugin-opts) are not supported in Clash YAML")
 	}
 
+	if p.UDP != nil {
+		udpStr := strings.ToLower(fmt.Sprintf("%v", p.UDP))
+		if udpStr == "false" || udpStr == "0" {
+			return nodes.Input{}, errors.New("udp=false is not supported because per-node UDP disabling cannot be represented")
+		}
+	}
+
+	if p.RealityOpts != nil {
+		return nodes.Input{}, errors.New("reality-opts is not supported; cannot import as plain TLS")
+	}
+	if p.GRPCOpts != nil {
+		return nodes.Input{}, errors.New("grpc-opts is not supported in Clash YAML")
+	}
+	if p.H2Opts != nil {
+		return nodes.Input{}, errors.New("h2-opts is not supported in Clash YAML")
+	}
+	if p.HTTPOpts != nil {
+		return nodes.Input{}, errors.New("http-opts is not supported in Clash YAML")
+	}
+
 	var transportInput *nodes.TransportInput
 	network := strings.ToLower(strings.TrimSpace(p.Network))
 	switch network {
@@ -300,7 +313,7 @@ func mapClashProxy(p clashProxy) (nodes.Input, error) {
 		}
 		transportInput = &nodes.TransportInput{
 			Type: "ws",
-			Path: strings.TrimSpace(path),
+			Path: normalizePath(path),
 			Host: strings.TrimSpace(host),
 		}
 	case "tcp", "":
@@ -324,10 +337,12 @@ func mapClashProxy(p clashProxy) (nodes.Input, error) {
 					host = p.WSHeaders["host"]
 				}
 			}
-			transportInput = &nodes.TransportInput{
-				Type: "ws",
-				Path: strings.TrimSpace(path),
-				Host: strings.TrimSpace(host),
+			if path != "" || host != "" {
+				transportInput = &nodes.TransportInput{
+					Type: "ws",
+					Path: normalizePath(path),
+					Host: strings.TrimSpace(host),
+				}
 			}
 		}
 	default:
@@ -381,10 +396,22 @@ func mapClashProxy(p clashProxy) (nodes.Input, error) {
 		if uuid == "" {
 			return nodes.Input{}, errors.New("VMess UUID is required")
 		}
+		if p.Cipher != "" {
+			c := strings.ToLower(strings.TrimSpace(p.Cipher))
+			if c != "auto" && c != "none" && c != "zero" && c != "aes-128-gcm" && c != "chacha20-poly1305" {
+				return nodes.Input{}, fmt.Errorf("unsupported VMess cipher %q in Clash YAML", p.Cipher)
+			}
+		}
 		if p.AlterID != nil {
-			alterIDNum, err := parsePort(p.AlterID)
-			if err == nil && alterIDNum != 0 {
+			aid, err := parseAlterID(p.AlterID)
+			if err != nil || aid != 0 {
 				return nodes.Input{}, fmt.Errorf("unsupported VMess alterId %v (only alterId=0 / AEAD is supported)", p.AlterID)
+			}
+		}
+		if p.AlterIDKebab != nil {
+			aid, err := parseAlterID(p.AlterIDKebab)
+			if err != nil || aid != 0 {
+				return nodes.Input{}, fmt.Errorf("unsupported VMess alter-id %v (only alterId=0 / AEAD is supported)", p.AlterIDKebab)
 			}
 		}
 		return nodes.Input{

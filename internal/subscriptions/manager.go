@@ -21,7 +21,10 @@ import (
 	"winrouter/internal/nodes"
 )
 
-const maxDocumentSize = 1 << 20
+const (
+	maxDocumentSize = 10 << 20
+	maxRedirects    = 5
+)
 
 type Manager struct {
 	mu        sync.Mutex
@@ -39,9 +42,7 @@ func New(path string, protector nodes.Protector, nodeStore *nodes.Store) (*Manag
 	manager := &Manager{
 		path: path, protector: protector, nodes: nodeStore,
 		state: state{SchemaVersion: SchemaVersion, Subscriptions: []storedSubscription{}},
-		client: &http.Client{Timeout: 15 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error {
-			return errors.New("subscription redirects are disabled")
-		}},
+		client: createSubscriptionHTTPClient(),
 	}
 	data, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
@@ -149,7 +150,8 @@ func (m *Manager) Refresh(ctx context.Context, id string) (Subscription, error) 
 	if err != nil {
 		return Subscription{}, err
 	}
-	request.Header.Set("Accept", "application/json")
+	request.Header.Set("User-Agent", "v2rayN/6.42; ClashMeta; WinRouter/1.0")
+	request.Header.Set("Accept", "*/*")
 	response, err := m.client.Do(request)
 	if err != nil {
 		return Subscription{}, m.recordFailure(index, "download failed")
@@ -216,17 +218,66 @@ func validateSubscriptionURL(value string) (*url.URL, error) {
 	if err != nil || parsed.Hostname() == "" || parsed.User != nil {
 		return nil, errors.New("subscription URL must have a valid host and must not use URL userinfo")
 	}
+	ip := net.ParseIP(parsed.Hostname())
+	if ip != nil {
+		if ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified() {
+			return nil, errors.New("subscription URL must not target link-local, multicast, or unspecified IP addresses")
+		}
+	}
 	switch strings.ToLower(parsed.Scheme) {
 	case "https":
 		return parsed, nil
 	case "http":
-		ip := net.ParseIP(parsed.Hostname())
 		if ip != nil && (ip.IsPrivate() || ip.IsLoopback()) {
 			return parsed, nil
 		}
 		return nil, errors.New("HTTP subscription URL is allowed only for a literal private or loopback IP address")
 	default:
 		return nil, errors.New("subscription URL must use HTTPS, or HTTP with a literal private or loopback IP address")
+	}
+}
+
+func isPrivateOrLoopbackEndpoint(u *url.URL) bool {
+	if u == nil {
+		return false
+	}
+	ip := net.ParseIP(u.Hostname())
+	return ip != nil && (ip.IsPrivate() || ip.IsLoopback())
+}
+
+func createSubscriptionHTTPClient() *http.Client {
+	return &http.Client{
+		Timeout: 30 * time.Second,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= maxRedirects {
+				return fmt.Errorf("stopped after %d redirects", maxRedirects)
+			}
+			initial := via[0]
+			if strings.EqualFold(initial.URL.Scheme, "https") && !strings.EqualFold(req.URL.Scheme, "https") {
+				return errors.New("subscription redirect cannot downgrade from HTTPS to HTTP")
+			}
+			dest, err := validateSubscriptionURL(req.URL.String())
+			if err != nil {
+				return fmt.Errorf("invalid subscription redirect URL: %w", err)
+			}
+			if !isPrivateOrLoopbackEndpoint(initial.URL) {
+				if isPrivateOrLoopbackEndpoint(dest) {
+					return errors.New("public HTTPS subscription cannot redirect to private or loopback IP")
+				}
+				// Verify destination domain does not resolve to private/loopback/link-local IP (DNS rebinding defense)
+				if ip := net.ParseIP(dest.Hostname()); ip == nil {
+					addrs, err := net.DefaultResolver.LookupIP(context.Background(), "ip", dest.Hostname())
+					if err == nil {
+						for _, addr := range addrs {
+							if addr.IsPrivate() || addr.IsLoopback() || addr.IsLinkLocalUnicast() || addr.IsLinkLocalMulticast() || addr.IsUnspecified() {
+								return errors.New("public HTTPS subscription cannot redirect to domain resolving to private or loopback IP")
+							}
+						}
+					}
+				}
+			}
+			return nil
+		},
 	}
 }
 

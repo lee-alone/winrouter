@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
+	"strconv"
 	"strings"
 
 	"winrouter/internal/nodes"
@@ -19,18 +21,15 @@ func Parse(data []byte) ([]nodes.Input, error) {
 
 	// 1. Strict versioned JSON format
 	if trimmed[0] == '{' {
-		return parseVersionedJSON(trimmed)
+		if n, err := parseVersionedJSON(trimmed); err == nil {
+			return n, nil
+		}
 	}
 
 	// 2. Clash/Mihomo YAML format
 	if isYAMLSubscription(trimmed) {
-		nodes, err := parseClashYAML(trimmed)
-		if err == nil {
-			return nodes, nil
-		}
-		// If it has explicit "proxies:" keyword and failed parsing, return the YAML error
-		if bytes.Contains(trimmed, []byte("proxies:")) {
-			return nil, err
+		if nodesList, err := parseClashYAML(trimmed); err == nil && len(nodesList) > 0 {
+			return nodesList, nil
 		}
 	}
 
@@ -40,6 +39,7 @@ func Parse(data []byte) ([]nodes.Input, error) {
 
 func isYAMLSubscription(data []byte) bool {
 	return bytes.Contains(data, []byte("proxies:")) ||
+		bytes.Contains(data, []byte("Proxy:")) ||
 		bytes.HasPrefix(data, []byte("port:")) ||
 		bytes.HasPrefix(data, []byte("mixed-port:")) ||
 		bytes.HasPrefix(data, []byte("mode:")) ||
@@ -89,20 +89,41 @@ func parseURIsSubscription(data []byte) ([]nodes.Input, error) {
 
 	// Check if the lines directly contain valid proxy URI schemes
 	if hasSupportedURIScheme(lines) {
-		return parseLines(lines)
+		if result, err := parseLines(lines); err == nil && len(result) > 0 {
+			return result, nil
+		}
 	}
 
 	// Otherwise, try Base64 decoding the whole body
 	decoded, err := decodeBase64(text)
-	if err != nil {
-		return nil, errors.New("subscription is neither versioned JSON nor valid Base64 / URI list")
+	if err == nil {
+		trimmedDecoded := bytes.TrimSpace(decoded)
+		if len(trimmedDecoded) > 0 && trimmedDecoded[0] == '{' {
+			if n, err := parseVersionedJSON(trimmedDecoded); err == nil {
+				return n, nil
+			}
+		}
+		if isYAMLSubscription(trimmedDecoded) {
+			if nodesList, err := parseClashYAML(trimmedDecoded); err == nil && len(nodesList) > 0 {
+				return nodesList, nil
+			}
+		}
+		decodedLines := extractNonEmptyLines(string(decoded))
+		if len(decodedLines) > 0 {
+			if result, err := parseLines(decodedLines); err == nil && len(result) > 0 {
+				return result, nil
+			}
+		}
 	}
 
-	decodedLines := extractNonEmptyLines(string(decoded))
-	if len(decodedLines) == 0 {
-		return nil, errors.New("subscription contains no nodes")
+	// Fallback to parse lines directly if not already succeeded
+	if len(lines) > 0 {
+		if result, err := parseLines(lines); err == nil && len(result) > 0 {
+			return result, nil
+		}
 	}
-	return parseLines(decodedLines)
+
+	return nil, errors.New("subscription contains no valid or supported proxy nodes")
 }
 
 func extractNonEmptyLines(content string) []string {
@@ -123,7 +144,9 @@ func hasSupportedURIScheme(lines []string) bool {
 		if strings.HasPrefix(lower, "ss://") ||
 			strings.HasPrefix(lower, "vmess://") ||
 			strings.HasPrefix(lower, "vless://") ||
-			strings.HasPrefix(lower, "trojan://") {
+			strings.HasPrefix(lower, "trojan://") ||
+			strings.HasPrefix(lower, "http://") ||
+			strings.HasPrefix(lower, "https://") {
 			return true
 		}
 	}
@@ -131,16 +154,27 @@ func hasSupportedURIScheme(lines []string) bool {
 }
 
 func parseLines(lines []string) ([]nodes.Input, error) {
-	if len(lines) == 0 || len(lines) > 500 {
-		return nil, errors.New("subscription must contain 1 to 500 nodes")
+	if len(lines) == 0 {
+		return nil, errors.New("subscription contains no lines")
 	}
 	result := make([]nodes.Input, 0, len(lines))
-	for index, line := range lines {
+	var lastErr error
+	for _, line := range lines {
 		item, err := parseSingleNodeURI(line)
 		if err != nil {
-			return nil, fmt.Errorf("subscription node %d: %w", index+1, err)
+			lastErr = err
+			continue
 		}
 		result = append(result, item)
+		if len(result) >= 500 {
+			break
+		}
+	}
+	if len(result) == 0 {
+		if lastErr != nil {
+			return nil, fmt.Errorf("no valid proxy nodes found: %w", lastErr)
+		}
+		return nil, errors.New("no valid proxy nodes found")
 	}
 	return result, nil
 }
@@ -156,9 +190,57 @@ func parseSingleNodeURI(line string) (nodes.Input, error) {
 		return parseVLESSURI(line)
 	case strings.HasPrefix(lower, "trojan://"):
 		return parseTrojanURI(line)
+	case strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "https://"):
+		return parseHTTPNodeURI(line)
 	default:
 		return nodes.Input{}, fmt.Errorf("unsupported protocol scheme in line: %s", truncateString(line, 30))
 	}
+}
+
+func parseHTTPNodeURI(value string) (nodes.Input, error) {
+	parsed, err := url.Parse(value)
+	if err != nil || parsed.Hostname() == "" {
+		return nodes.Input{}, errors.New("invalid HTTP proxy URI")
+	}
+	name := normalizeName(parsed.Fragment, "HTTP Proxy")
+	server := parsed.Hostname()
+	portNum := uint16(80)
+	if strings.EqualFold(parsed.Scheme, "https") {
+		portNum = 443
+	}
+	if portStr := parsed.Port(); portStr != "" {
+		p, err := strconv.ParseUint(portStr, 10, 16)
+		if err != nil || p == 0 {
+			return nodes.Input{}, fmt.Errorf("invalid port %q in %s proxy URI", portStr, parsed.Scheme)
+		}
+		portNum = uint16(p)
+	}
+	var username, password string
+	if parsed.User != nil {
+		username = parsed.User.Username()
+		password, _ = parsed.User.Password()
+	}
+	var tlsInput *nodes.TLSInput
+	if strings.EqualFold(parsed.Scheme, "https") {
+		tlsInput = &nodes.TLSInput{
+			Enabled:    true,
+			ServerName: server,
+		}
+	}
+	return nodes.Input{
+		Name:     name,
+		Type:     nodes.TypeHTTP,
+		Server:   server,
+		Port:     portNum,
+		Egress:   nodes.EgressB,
+		Username: username,
+		Password: password,
+		Authentication: nodes.AuthenticationInput{
+			Username: username,
+			Password: password,
+		},
+		TLS: tlsInput,
+	}, nil
 }
 
 func truncateString(s string, max int) string {

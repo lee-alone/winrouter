@@ -76,6 +76,8 @@ func parseVLESSURI(value string) (nodes.Input, error) {
 		}
 	case "", "none":
 		// TLS not enabled
+	case "reality":
+		return nodes.Input{}, errors.New("VLESS Reality security is not supported; cannot import as plain TLS")
 	default:
 		return nodes.Input{}, fmt.Errorf("unsupported VLESS security %q (only standard TLS is supported)", security)
 	}
@@ -88,11 +90,18 @@ func parseVLESSURI(value string) (nodes.Input, error) {
 		host := query.Get("host")
 		transportInput = &nodes.TransportInput{
 			Type: "ws",
-			Path: path,
-			Host: host,
+			Path: normalizePath(path),
+			Host: strings.TrimSpace(host),
 		}
 	case "tcp", "":
-		// standard TCP
+		if path := query.Get("path"); path != "" {
+			host := query.Get("host")
+			transportInput = &nodes.TransportInput{
+				Type: "ws",
+				Path: normalizePath(path),
+				Host: strings.TrimSpace(host),
+			}
+		}
 	default:
 		return nodes.Input{}, fmt.Errorf("unsupported VLESS transport type %q (only tcp and ws are supported)", transportType)
 	}

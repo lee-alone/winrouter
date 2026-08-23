@@ -117,17 +117,41 @@ func TestGeneratedShadowsocksProxyPassesLockedSingBoxCheck(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping locked core integration check")
 	}
-	input := fixtureInput(t)
-	input.DefaultOutbound = "c"
-	input.Proxy = &MVPProxy{Type: "shadowsocks", Server: "37.19.198.244", Port: 443, Method: "aes-128-gcm", Password: "shadowsocks"}
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-	generated, report, err := ValidateMVPWithCore(ctx, input, filepath.Join("..", "..", "resources", "core", "sing-box.exe"))
-	if err != nil {
-		t.Fatalf("ValidateMVPWithCore() error: %v", err)
+	testCases := []struct {
+		method   string
+		password string
+	}{
+		{"aes-128-gcm", "shadowsocks-pass"},
+		{"aes-192-gcm", "shadowsocks-pass"},
+		{"aes-256-gcm", "shadowsocks-pass"},
+		{"chacha20-ietf-poly1305", "shadowsocks-pass"},
+		{"xchacha20-ietf-poly1305", "shadowsocks-pass"},
+		{"2022-blake3-aes-128-gcm", "MTIzNDU2Nzg5MDEyMzQ1Ng=="}, // 16 bytes base64
+		{"2022-blake3-aes-256-gcm", "YWVzMjU2Z2Ntc2VjcmV0MzJieXRlc3NlY3JldDEyMzQ="}, // 32 bytes base64
+		{"2022-blake3-chacha20-poly1305", "YWVzMjU2Z2Ntc2VjcmV0MzJieXRlc3NlY3JldDEyMzQ="}, // 32 bytes base64
 	}
-	if generated.Model.Route.Final != "proxy" || !report.ModelValid || !report.SchemaValid || !report.SemanticValid || report.Core.SHA256 == "" {
-		t.Fatalf("validation report = %#v", report)
+
+	for _, tc := range testCases {
+		t.Run(tc.method, func(t *testing.T) {
+			input := fixtureInput(t)
+			input.DefaultOutbound = "c"
+			input.Proxy = &MVPProxy{
+				Type:     "shadowsocks",
+				Server:   "37.19.198.244",
+				Port:     443,
+				Method:   tc.method,
+				Password: tc.password,
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			defer cancel()
+			generated, report, err := ValidateMVPWithCore(ctx, input, filepath.Join("..", "..", "resources", "core", "sing-box.exe"))
+			if err != nil {
+				t.Fatalf("ValidateMVPWithCore() failed for method %s: %v", tc.method, err)
+			}
+			if generated.Model.Route.Final != "proxy" || !report.ModelValid || !report.SchemaValid || !report.SemanticValid || report.Core.SHA256 == "" {
+				t.Fatalf("validation report for method %s = %#v", tc.method, report)
+			}
+		})
 	}
 }
 
