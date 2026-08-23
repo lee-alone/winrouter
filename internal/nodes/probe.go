@@ -27,7 +27,7 @@ const (
 	ErrorCategoryTimeout        = "timeout"
 	ErrorCategoryCoreFailed     = "core_failed"
 
-	DefaultTestTarget = "https://cp.cloudflare.com/generate_204"
+	DefaultTestTarget = "http://www.google.com/generate_204"
 )
 
 type ProbeOptions struct {
@@ -64,12 +64,7 @@ func ProbeWithOptions(ctx context.Context, node Node, credentials Credentials, o
 
 	// Stage 1: TCP Reachability Probe with optional SourceIP binding
 	tcpStart := time.Now()
-	dialer := net.Dialer{}
-	if opts.SourceIP != "" {
-		if ip := net.ParseIP(opts.SourceIP); ip != nil {
-			dialer.LocalAddr = &net.TCPAddr{IP: ip}
-		}
-	}
+	dialer := dialerForEndpoint(server, opts.SourceIP)
 	tcpConn, tcpErr := dialer.DialContext(ctx, "tcp", net.JoinHostPort(server, fmt.Sprint(node.Port)))
 	result.TCPMS = time.Since(tcpStart).Milliseconds()
 
@@ -111,12 +106,7 @@ func ProbeWithOptions(ctx context.Context, node Node, credentials Credentials, o
 }
 
 func probeHTTPProtocol(ctx context.Context, node Node, credentials Credentials, server, sourceIP string, result *TestResult) {
-	dialer := net.Dialer{}
-	if sourceIP != "" {
-		if ip := net.ParseIP(sourceIP); ip != nil {
-			dialer.LocalAddr = &net.TCPAddr{IP: ip}
-		}
-	}
+	dialer := dialerForEndpoint(server, sourceIP)
 	conn, err := dialer.DialContext(ctx, "tcp", net.JoinHostPort(server, fmt.Sprint(node.Port)))
 	if err != nil {
 		result.ErrorCategory = ErrorCategoryTCPFailed
@@ -164,6 +154,23 @@ func probeHTTPProtocol(ctx context.Context, node Node, credentials Credentials, 
 		result.ErrorCategory = ErrorCategoryProtocolFailed
 		result.Error = strings.TrimSpace(response.Status)
 	}
+}
+
+// A LocalAddr must use the same address family as the remote endpoint. The
+// egress selector currently provides an IPv4 source address, which must not
+// be applied to an IPv6 node or Windows may wait until the probe deadline.
+func dialerForEndpoint(server, sourceIP string) net.Dialer {
+	dialer := net.Dialer{}
+	remoteIP := net.ParseIP(server)
+	source := net.ParseIP(sourceIP)
+	if source == nil || remoteIP == nil {
+		return dialer
+	}
+	if (remoteIP.To4() == nil) != (source.To4() == nil) {
+		return dialer
+	}
+	dialer.LocalAddr = &net.TCPAddr{IP: source}
+	return dialer
 }
 
 type ephemeralSingBoxConfig struct {
@@ -235,14 +242,25 @@ func probeWithEphemeralCore(ctx context.Context, node Node, credentials Credenti
 		tlsConfig := map[string]any{
 			"enabled": true,
 		}
-		if node.TLS.ServerName != "" {
-			tlsConfig["server_name"] = node.TLS.ServerName
+		sni := node.TLS.ServerName
+		if sni == "" && node.Server != "" && net.ParseIP(node.Server) == nil {
+			sni = node.Server
+		}
+		if sni != "" {
+			tlsConfig["server_name"] = sni
 		}
 		if node.TLS.Insecure {
 			tlsConfig["insecure"] = true
 		}
-		if len(node.TLS.ALPN) > 0 {
-			tlsConfig["alpn"] = node.TLS.ALPN
+		var cleanALPN []string
+		for _, a := range node.TLS.ALPN {
+			trimmed := strings.TrimSpace(a)
+			if trimmed != "" && !strings.EqualFold(trimmed, "default") {
+				cleanALPN = append(cleanALPN, trimmed)
+			}
+		}
+		if len(cleanALPN) > 0 {
+			tlsConfig["alpn"] = cleanALPN
 		}
 		proxyOutbound["tls"] = tlsConfig
 	} else if node.Type == TypeTrojan {

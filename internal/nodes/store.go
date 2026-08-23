@@ -198,8 +198,8 @@ func (s *Store) CommitResolvedIP(id, address string) (Node, error) {
 	if index < 0 {
 		return Node{}, fmt.Errorf("node %q not found", id)
 	}
-	if err != nil || !usableIPv4(parsed) {
-		return Node{}, errors.New("resolved proxy address must be a usable IPv4 address")
+	if err != nil || (!usableIPv4(parsed) && !usableIPv6(parsed)) {
+		return Node{}, errors.New("resolved proxy address must be a usable IP address")
 	}
 	next := cloneState(s.state)
 	next.Nodes[index].ResolvedIP = parsed.String()
@@ -586,7 +586,7 @@ func validateState(value state) error {
 		seen[item.ID] = struct{}{}
 		if item.ResolvedIP != "" {
 			address, err := netip.ParseAddr(item.ResolvedIP)
-			if err != nil || !usableIPv4(address) {
+			if err != nil || (!usableIPv4(address) && !usableIPv6(address)) {
 				return fmt.Errorf("stored node %q has invalid resolved IP", item.ID)
 			}
 		}

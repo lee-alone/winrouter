@@ -937,18 +937,19 @@ function parseProxyURI(uri: string) {
       throw new Error('无效的 VMess base64 编码')
     }
     const data = JSON.parse(jsonStr)
+    const vmessAlpn = (data.alpn || '').trim()
     return {
       name: data.ps || `${data.add}:${data.port}`,
       type: 'vmess' as const,
       server: data.add || '',
       port: Number(data.port) || 443,
       uuid: data.id || '',
-      tls_enabled: data.tls === 'tls',
-      tls_server_name: data.sni || data.host || '',
+      tls_enabled: data.tls === 'tls' || data.tls === '1' || data.tls === 'true',
+      tls_server_name: data.sni || data.host || data.add || '',
       transport_type: (data.net === 'ws' ? 'ws' : 'tcp') as 'tcp' | 'ws',
       transport_path: data.path || '',
       transport_host: data.host || '',
-      tls_alpn: data.alpn || '',
+      tls_alpn: vmessAlpn.toLowerCase() === 'default' ? '' : vmessAlpn,
     }
   }
 
@@ -965,6 +966,7 @@ function parseProxyURI(uri: string) {
     }
     const isTLS = security === 'tls'
     const isWS = params.get('type') === 'ws'
+    const alpn = (params.get('alpn') || '').trim()
     return {
       name: tag || `${server}:${port}`,
       type: 'vless' as const,
@@ -973,9 +975,11 @@ function parseProxyURI(uri: string) {
       uuid,
       flow: params.get('flow') || '',
       tls_enabled: isTLS,
-      tls_server_name: params.get('sni') || '',
+      tls_server_name: params.get('sni') || params.get('peer') || server || '',
       tls_insecure: params.get('allowInsecure') === '1' || params.get('insecure') === '1',
-      tls_alpn: params.get('alpn') || '',
+      // Xray uses "default" as a sentinel meaning no explicit ALPN. It is
+      // not a literal protocol name and must not be sent to sing-box.
+      tls_alpn: alpn.toLowerCase() === 'default' ? '' : alpn,
       transport_type: (isWS ? 'ws' : 'tcp') as 'tcp' | 'ws',
       transport_path: params.get('path') || '',
       transport_host: params.get('host') || '',
@@ -990,6 +994,7 @@ function parseProxyURI(uri: string) {
     const tag = decodeURIComponent(url.hash.replace(/^#/, ''))
     const params = url.searchParams
     const isWS = params.get('type') === 'ws'
+    const trojanAlpn = (params.get('alpn') || '').trim()
     return {
       name: tag || `${server}:${port}`,
       type: 'trojan' as const,
@@ -997,9 +1002,9 @@ function parseProxyURI(uri: string) {
       port,
       password,
       tls_enabled: true,
-      tls_server_name: params.get('sni') || '',
+      tls_server_name: params.get('sni') || params.get('peer') || server || '',
       tls_insecure: params.get('allowInsecure') === '1' || params.get('insecure') === '1',
-      tls_alpn: params.get('alpn') || '',
+      tls_alpn: trojanAlpn.toLowerCase() === 'default' ? '' : trojanAlpn,
       transport_type: (isWS ? 'ws' : 'tcp') as 'tcp' | 'ws',
       transport_path: params.get('path') || '',
       transport_host: params.get('host') || '',
@@ -1173,11 +1178,15 @@ function setMode(mode: 'direct-split' | 'proxy-split') {
   notice.value = mode === 'proxy-split' ? '已切换为代理模式，启动前仍会执行完整校验。' : '已切换为双网卡直连模式。'
 }
 
+function getBootstrapDNSServer(): string {
+  return dnsSettings.value.domestic?.server || '223.5.5.5'
+}
+
 async function testProxy(node: nodes.Node) {
   testingProxyID.value = node.id
   error.value = ''
   try {
-    const result = await TestProxyNode(node.id, '8.8.8.8')
+    const result = await TestProxyNode(node.id, getBootstrapDNSServer())
     proxyTests.value = { ...proxyTests.value, [node.id]: result }
   } catch (reason) {
     error.value = `节点测试失败：${messageOf(reason)}`
@@ -1187,7 +1196,7 @@ async function testProxy(node: nodes.Node) {
 async function speedTestAllProxies() {
   testingAllProxies.value = true; error.value = ''
   try {
-    const results = await SpeedTestProxyNodes('8.8.8.8')
+    const results = await SpeedTestProxyNodes(getBootstrapDNSServer())
     const next = { ...proxyTests.value }
     for (const result of results) next[result.node_id] = result
     proxyTests.value = next

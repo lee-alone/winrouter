@@ -449,7 +449,7 @@ func (a *App) TestProxyNode(id, dnsServer string) (nodes.TestResult, error) {
 			}
 			return result, nil
 		}
-		resolved, resolveErr := nodes.ResolveIPv4(ctx, node.Server, dnsServer, source)
+		resolved, resolveErr := nodes.ResolveEndpoint(ctx, node.Server, dnsServer, source)
 		if resolveErr != nil {
 			result := nodes.TestResult{
 				NodeID:        node.ID,
@@ -687,7 +687,10 @@ func (a *App) interfaceEgressDetails(egress string) (sourceIP string, bindInterf
 	if iface.Match == nil {
 		return "", "", fmt.Errorf("interface %s is not resolved", strings.ToUpper(egress))
 	}
-	bindInterface = iface.Match.Adapter.GUID
+	// sing-box bind_interface expects the Windows interface name (for example
+	// "Ethernet"), while the GUID is only used by WinRouter for stable
+	// interface identity and selection persistence.
+	bindInterface = iface.Match.Adapter.FriendlyName
 	for _, address := range iface.Match.Adapter.Addresses {
 		parsed := net.ParseIP(address.IP)
 		if parsed != nil && parsed.To4() != nil && !parsed.IsLoopback() && !parsed.IsUnspecified() {

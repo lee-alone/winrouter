@@ -253,14 +253,21 @@ func mapClashProxy(p clashProxy) (nodes.Input, error) {
 		sni = strings.TrimSpace(p.ServerName)
 	}
 	if p.TLS || protoType == "trojan" {
-		if sni == "" && protoType == "trojan" {
+		if sni == "" {
 			sni = server
+		}
+		var cleanALPN []string
+		for _, a := range p.ALPN {
+			trimmed := strings.TrimSpace(a)
+			if trimmed != "" && !strings.EqualFold(trimmed, "default") {
+				cleanALPN = append(cleanALPN, trimmed)
+			}
 		}
 		tlsInput = &nodes.TLSInput{
 			Enabled:    true,
 			ServerName: sni,
 			Insecure:   p.SkipCertVerify,
-			ALPN:       p.ALPN,
+			ALPN:       cleanALPN,
 		}
 	}
 

@@ -178,8 +178,11 @@ func TestStoreCommitsResolvedIPAtomicallyAndPreservesItOnMetadataEdit(t *testing
 	if _, err := store.CommitResolvedIP(item.ID, "127.0.0.1"); err == nil {
 		t.Fatal("loopback resolution accepted")
 	}
+	if _, err := store.CommitResolvedIP(item.ID, "2606:4700::44"); err != nil {
+		t.Fatalf("IPv6 resolution rejected: %v", err)
+	}
 	loaded, err := New(path, testProtector{})
-	if err != nil || loaded.List()[0].ResolvedIP != "203.0.113.44" {
+	if err != nil || loaded.List()[0].ResolvedIP != "2606:4700::44" {
 		t.Fatalf("reloaded = %#v, %v", loaded.List(), err)
 	}
 }

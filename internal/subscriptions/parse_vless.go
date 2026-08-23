@@ -58,10 +58,13 @@ func parseVLESSURI(value string) (nodes.Input, error) {
 		if sni == "" {
 			sni = strings.TrimSpace(query.Get("peer"))
 		}
+		if sni == "" {
+			sni = server
+		}
 		var alpn []string
 		if alpnStr := strings.TrimSpace(query.Get("alpn")); alpnStr != "" {
 			for _, item := range strings.Split(alpnStr, ",") {
-				if trimmed := strings.TrimSpace(item); trimmed != "" {
+				if trimmed := strings.TrimSpace(item); trimmed != "" && !strings.EqualFold(trimmed, "default") {
 					alpn = append(alpn, trimmed)
 				}
 			}

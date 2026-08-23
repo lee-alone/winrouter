@@ -54,7 +54,7 @@ func parseTrojanURI(value string) (nodes.Input, error) {
 	var alpn []string
 	if alpnStr := strings.TrimSpace(query.Get("alpn")); alpnStr != "" {
 		for _, item := range strings.Split(alpnStr, ",") {
-			if trimmed := strings.TrimSpace(item); trimmed != "" {
+			if trimmed := strings.TrimSpace(item); trimmed != "" && !strings.EqualFold(trimmed, "default") {
 				alpn = append(alpn, trimmed)
 			}
 		}

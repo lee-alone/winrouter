@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"net"
+	"net/netip"
 	"strings"
 	"testing"
 	"time"
@@ -142,3 +143,25 @@ func TestProbeNonHTTPWithoutCoreFails(t *testing.T) {
 		}
 	}
 }
+
+func TestDialerForEndpointDoesNotBindIPv4SourceToIPv6Endpoint(t *testing.T) {
+	dialer := dialerForEndpoint("2001:db8::10", "192.0.2.10")
+	if dialer.LocalAddr != nil {
+		t.Fatalf("expected no IPv4 LocalAddr for IPv6 endpoint, got %#v", dialer.LocalAddr)
+	}
+
+	dialer = dialerForEndpoint("192.0.2.20", "192.0.2.10")
+	if dialer.LocalAddr == nil || dialer.LocalAddr.(*net.TCPAddr).IP.String() != "192.0.2.10" {
+		t.Fatalf("expected IPv4 source binding, got %#v", dialer.LocalAddr)
+	}
+}
+
+func TestUsableAddressesRejectUnspecifiedResults(t *testing.T) {
+	if usableIPv4(netip.MustParseAddr("0.0.0.0")) {
+		t.Fatal("0.0.0.0 must not be treated as a usable IPv4 endpoint")
+	}
+	if usableIPv6(netip.MustParseAddr("::")) {
+		t.Fatal(":: must not be treated as a usable IPv6 endpoint")
+	}
+}
+

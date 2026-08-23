@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/netip"
 	"sort"
 	"strings"
@@ -225,11 +226,22 @@ func GenerateMVP(input MVPConfig) (Generated, error) {
 			Security:      input.Proxy.Security,
 		}
 		if input.Proxy.TLS != nil && input.Proxy.TLS.Enabled {
+			sni := input.Proxy.TLS.ServerName
+			if sni == "" && input.Proxy.Server != "" && net.ParseIP(input.Proxy.Server) == nil {
+				sni = input.Proxy.Server
+			}
+			var cleanALPN []string
+			for _, a := range input.Proxy.TLS.ALPN {
+				trimmed := strings.TrimSpace(a)
+				if trimmed != "" && !strings.EqualFold(trimmed, "default") {
+					cleanALPN = append(cleanALPN, trimmed)
+				}
+			}
 			proxyOutbound.TLS = &TLSConfig{
 				Enabled:    true,
-				ServerName: input.Proxy.TLS.ServerName,
+				ServerName: sni,
 				Insecure:   input.Proxy.TLS.Insecure,
-				ALPN:       append([]string(nil), input.Proxy.TLS.ALPN...),
+				ALPN:       cleanALPN,
 			}
 		}
 		if input.Proxy.Type == "trojan" && proxyOutbound.TLS == nil {

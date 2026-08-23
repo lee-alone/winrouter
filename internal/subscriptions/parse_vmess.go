@@ -77,14 +77,21 @@ func parseVMessURI(value string) (nodes.Input, error) {
 		var alpn []string
 		if strings.TrimSpace(data.ALPN) != "" {
 			for _, item := range strings.Split(data.ALPN, ",") {
-				if trimmed := strings.TrimSpace(item); trimmed != "" {
+				if trimmed := strings.TrimSpace(item); trimmed != "" && !strings.EqualFold(trimmed, "default") {
 					alpn = append(alpn, trimmed)
 				}
 			}
 		}
+		sni := strings.TrimSpace(data.SNI)
+		if sni == "" {
+			sni = strings.TrimSpace(data.Host)
+		}
+		if sni == "" {
+			sni = server
+		}
 		tlsInput = &nodes.TLSInput{
 			Enabled:    true,
-			ServerName: strings.TrimSpace(data.SNI),
+			ServerName: sni,
 			ALPN:       alpn,
 		}
 	case "", "none", "0", "false":
