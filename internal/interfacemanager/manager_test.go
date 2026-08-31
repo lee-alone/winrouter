@@ -595,4 +595,28 @@ func TestManagerIPv6TUNPrefixConflictDiagnostics(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertNoDiagnostic(t, snapshot.Diagnostics, "tun-ipv6-conflict")
+
+	// 4. No conflict when WinRouter-TUN itself is running and present in adapters/routes
+	tunAdapter := interfaces.Adapter{
+		Index: 12, IPv6Index: 13, LUID: 9999, FriendlyName: "WinRouter-TUN", Kind: interfaces.KindTunnel,
+		Addresses: []interfaces.Address{
+			{IP: "172.19.0.1", PrefixLength: 30},
+			{IP: "fdfe:dcba:9876::1", PrefixLength: 126},
+		},
+	}
+	routeTable = append(routeTable,
+		routes.Route{Prefix: "172.19.0.0/30", InterfaceIndex: 12, InterfaceLUID: 9999},
+		routes.Route{Prefix: "fdfe:dcba:9876::/126", InterfaceIndex: 13, InterfaceLUID: 9999},
+	)
+	manager.options.EnumerateInterfaces = func() ([]interfaces.Adapter, error) {
+		return []interfaces.Adapter{first, second, tunAdapter}, nil
+	}
+	snapshot, err = manager.Refresh()
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertNoDiagnostic(t, snapshot.Diagnostics, "tun-ipv6-conflict")
+	if snapshot.TUN == nil || snapshot.TUN.Prefix != "172.19.0.0/30" {
+		t.Fatalf("snapshot.TUN = %#v, want 172.19.0.0/30 preserved", snapshot.TUN)
+	}
 }

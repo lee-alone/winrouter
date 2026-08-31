@@ -94,3 +94,35 @@ func TestConflictsForPrefixIgnoresSummaryRoutes(t *testing.T) {
 		t.Fatalf("ConflictsForPrefix(v4) = %#v, want 0 conflicts", conflicts)
 	}
 }
+
+func TestConflictsForPrefixIgnoresWinRouterTUN(t *testing.T) {
+	tunAdapter := interfaces.Adapter{
+		Index: 12, IPv6Index: 13, LUID: 9999, FriendlyName: "WinRouter-TUN", Kind: interfaces.KindTunnel,
+		Addresses: []interfaces.Address{
+			{IP: "172.19.0.1", PrefixLength: 30},
+			{IP: "fdfe:dcba:9876::1", PrefixLength: 126},
+		},
+	}
+	routeTable := []routes.Route{
+		{Prefix: "172.19.0.0/30", InterfaceIndex: 12, InterfaceLUID: 9999},
+		{Prefix: "fdfe:dcba:9876::/126", InterfaceIndex: 13, InterfaceLUID: 9999},
+	}
+	v4Candidate := netip.MustParsePrefix("172.19.0.0/30")
+	v6Candidate := netip.MustParsePrefix("fdfe:dcba:9876::/126")
+
+	if conflicts := ConflictsForPrefix(v4Candidate, []interfaces.Adapter{tunAdapter}, routeTable); len(conflicts) != 0 {
+		t.Fatalf("ConflictsForPrefix(v4) on active WinRouter-TUN = %#v, want 0 conflicts", conflicts)
+	}
+	if conflicts := ConflictsForPrefix(v6Candidate, []interfaces.Adapter{tunAdapter}, routeTable); len(conflicts) != 0 {
+		t.Fatalf("ConflictsForPrefix(v6) on active WinRouter-TUN = %#v, want 0 conflicts", conflicts)
+	}
+
+	allocation, err := Allocate([]string{"172.19.0.0/30", "172.19.0.4/30"}, "172.19.0.0/30", []interfaces.Adapter{tunAdapter}, routeTable)
+	if err != nil {
+		t.Fatalf("Allocate() error: %v", err)
+	}
+	if allocation.Prefix != "172.19.0.0/30" || !allocation.Reused {
+		t.Fatalf("Allocate() = %#v, want 172.19.0.0/30 reused without jumping prefix", allocation)
+	}
+}
+

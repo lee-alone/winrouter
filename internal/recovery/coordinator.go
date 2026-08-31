@@ -299,7 +299,7 @@ func physicalFingerprint(snapshot interfacemanager.Snapshot) [sha256.Size]byte {
 		}
 		state.Gateways = append(state.Gateways, adapter.Gateways...)
 		for _, route := range snapshot.Routes {
-			if route.Prefix == "0.0.0.0/0" && route.InterfaceIndex == adapter.Index {
+			if route.Prefix == "0.0.0.0/0" && (route.InterfaceIndex == adapter.Index || (route.InterfaceLUID != 0 && adapter.LUID != 0 && route.InterfaceLUID == adapter.LUID)) {
 				state.HasDefault = true
 				break
 			}

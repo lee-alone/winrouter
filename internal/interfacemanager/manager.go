@@ -291,7 +291,7 @@ func overlapBlocksPolicy(overlap interfaces.PrefixOverlap, policy string) bool {
 
 func hasIPv4DefaultRoute(routeTable []routes.Route, adapter interfaces.Adapter) bool {
 	for _, route := range routeTable {
-		if route.Prefix == "0.0.0.0/0" && route.InterfaceIndex == adapter.Index {
+		if route.Prefix == "0.0.0.0/0" && (route.InterfaceIndex == adapter.Index || (route.InterfaceLUID != 0 && adapter.LUID != 0 && route.InterfaceLUID == adapter.LUID)) {
 			return true
 		}
 	}

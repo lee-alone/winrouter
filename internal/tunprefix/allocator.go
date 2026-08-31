@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net/netip"
+	"strings"
 
 	"winrouter/internal/interfaces"
 	"winrouter/internal/routes"
@@ -131,7 +132,21 @@ func ConflictsForPrefix(candidate netip.Prefix, adapters []interfaces.Adapter, r
 
 func conflictsFor(candidate netip.Prefix, adapters []interfaces.Adapter, routeTable []routes.Route) []Conflict {
 	result := make([]Conflict, 0)
+	tunInterfaceIndexes := make(map[uint32]bool)
+	tunInterfaceLUIDs := make(map[uint64]bool)
 	for _, adapter := range adapters {
+		if isWinRouterTUN(adapter) {
+			if adapter.Index != 0 {
+				tunInterfaceIndexes[adapter.Index] = true
+			}
+			if adapter.IPv6Index != 0 {
+				tunInterfaceIndexes[adapter.IPv6Index] = true
+			}
+			if adapter.LUID != 0 {
+				tunInterfaceLUIDs[adapter.LUID] = true
+			}
+			continue
+		}
 		for _, address := range adapter.Addresses {
 			ip, err := netip.ParseAddr(address.IP)
 			if err != nil || ip.BitLen() != candidate.Addr().BitLen() || int(address.PrefixLength) > ip.BitLen() {
@@ -148,6 +163,9 @@ func conflictsFor(candidate netip.Prefix, adapters []interfaces.Adapter, routeTa
 		}
 	}
 	for _, route := range routeTable {
+		if tunInterfaceIndexes[route.InterfaceIndex] || (route.InterfaceLUID != 0 && tunInterfaceLUIDs[route.InterfaceLUID]) {
+			continue
+		}
 		existing, err := netip.ParsePrefix(route.Prefix)
 		if err != nil || isSummaryRoute(existing.Masked()) || existing.Addr().BitLen() != candidate.Addr().BitLen() {
 			continue
@@ -157,6 +175,10 @@ func conflictsFor(candidate netip.Prefix, adapters []interfaces.Adapter, routeTa
 		}
 	}
 	return result
+}
+
+func isWinRouterTUN(adapter interfaces.Adapter) bool {
+	return strings.EqualFold(strings.TrimSpace(adapter.FriendlyName), "WinRouter-TUN")
 }
 
 func isSummaryRoute(prefix netip.Prefix) bool {
