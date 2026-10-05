@@ -115,6 +115,8 @@ export function SelectProxyChain(arg1:Array<string>):Promise<void>;
 
 export function SelectProxyNode(arg1:string):Promise<nodes.Node>;
 
+export function SelectSingleInterface(arg1:string):Promise<interfacemanager.Snapshot>;
+
 export function SetAutostartEnabled(arg1:boolean):Promise<autostart.Status>;
 
 export function SetConnectionObservationEnabled(arg1:boolean):Promise<void>;
@@ -128,6 +130,8 @@ export function SetProxyMode(arg1:string):Promise<void>;
 export function SetProxyNodeEgress(arg1:string,arg2:string):Promise<nodes.Node>;
 
 export function SetProxyNodeFavorite(arg1:string,arg2:boolean):Promise<nodes.Node>;
+
+export function SetRoutingMode(arg1:string):Promise<interfacemanager.Snapshot>;
 
 export function SetRuleSettings(arg1:rulesettings.Settings):Promise<rulesettings.Settings>;
 

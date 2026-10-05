@@ -311,6 +311,7 @@ export namespace config {
 	}
 	export class MVPConfig {
 	    schema_version: number;
+	    mode?: string;
 	    tun: MVPTUN;
 	    interface_a: MVPInterface;
 	    interface_b: MVPInterface;
@@ -334,6 +335,7 @@ export namespace config {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.schema_version = source["schema_version"];
+	        this.mode = source["mode"];
 	        this.tun = this.convertValues(source["tun"], MVPTUN);
 	        this.interface_a = this.convertValues(source["interface_a"], MVPInterface);
 	        this.interface_b = this.convertValues(source["interface_b"], MVPInterface);
@@ -646,6 +648,7 @@ export namespace interfacemanager {
 	}
 	export class Snapshot {
 	    sequence: number;
+	    mode: string;
 	    candidates: Candidate[];
 	    adapters: interfaces.Adapter[];
 	    routes: routes.Route[];
@@ -664,6 +667,7 @@ export namespace interfacemanager {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.sequence = source["sequence"];
+	        this.mode = source["mode"];
 	        this.candidates = this.convertValues(source["candidates"], Candidate);
 	        this.adapters = this.convertValues(source["adapters"], interfaces.Adapter);
 	        this.routes = this.convertValues(source["routes"], routes.Route);

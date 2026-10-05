@@ -159,9 +159,10 @@ func ValidateMVPSemantics(generated Generated) error {
 		}
 	}
 	expectedDNSFinal := "dns-global"
-	if generated.Model.Route.Final == "domestic-direct" {
+	switch generated.Model.Route.Final {
+	case "domestic-direct":
 		expectedDNSFinal = "dns-domestic"
-	} else if generated.Model.Route.Final == "proxy" {
+	case "proxy":
 		expectedDNSFinal = "dns-proxy"
 	}
 	if !model.DNS.IndependentCache || (model.DNS.Strategy != "ipv4_only" && model.DNS.Strategy != "prefer_ipv4") || model.DNS.Final != expectedDNSFinal {

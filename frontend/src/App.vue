@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, onUnmounted, ref, watch } from 'vue'
-import { AddProxyNode, AddSubscription, ApplyCoreConfiguration, ApplySelectedProxyConfiguration, ChangeSecurityPIN, ConfigureSRSSource, DeleteProxyNode, DeleteSRSSource, DeleteSubscription, DisableSecurityPIN, EnableSecurityPIN, ExportDiagnosticBundle, GetApplicationConfigDirectory, GetApplicationConfigInfo, GetAutostartStatus, GetConnectionObservationEnabled, GetCoreStatus, GetDNSPresets, GetDNSSettings, GetInterfaceSnapshot, GetIPv6Policy, GetObservations, GetProxySelection, GetRecoveryStatus, GetRuleSettings, GetSecurityStatus, GetSRSPresets, GetStatus, GetTrafficBudgetStatus, InspectProcessRules, ListProxyNodes, ListSRSSources, ListSubscriptions, PreviewCoreRules, PreviewDiagnosticBundle, RecordApplicationLog, RefreshSRSSource, RefreshSubscription, RepairApplicationSettings, ResetApplicationSettings, ResetInterfaceSelection, ResetTrafficBudget, ResetWindowsNetworkStack, RunHealthProbe, SelectInterfaces, SelectProxyChain, SelectProxyNode, SetAutostartEnabled, SetConnectionObservationEnabled, SetDNSSettings, SetIPv6Policy, SetProxyMode, SetProxyNodeEgress, SetProxyNodeFavorite, SetRuleSettings, SetTrafficBudget, SpeedTestProxyNodes, StopCore, TestDNSServer, TestProxyChain, TestProxyNode, UnlockSecurityVault, UpdateProxyNode, UpdateSubscription, ValidateCoreConfiguration, ValidateSelectedProxyConfiguration } from '../wailsjs/go/main/App'
+import { AddProxyNode, AddSubscription, ApplyCoreConfiguration, ApplySelectedProxyConfiguration, ChangeSecurityPIN, ConfigureSRSSource, DeleteProxyNode, DeleteSRSSource, DeleteSubscription, DisableSecurityPIN, EnableSecurityPIN, ExportDiagnosticBundle, GetApplicationConfigDirectory, GetApplicationConfigInfo, GetAutostartStatus, GetConnectionObservationEnabled, GetCoreStatus, GetDNSPresets, GetDNSSettings, GetInterfaceSnapshot, GetIPv6Policy, GetObservations, GetProxySelection, GetRecoveryStatus, GetRuleSettings, GetSecurityStatus, GetSRSPresets, GetStatus, GetTrafficBudgetStatus, InspectProcessRules, ListProxyNodes, ListSRSSources, ListSubscriptions, PreviewCoreRules, PreviewDiagnosticBundle, RecordApplicationLog, RefreshSRSSource, RefreshSubscription, RepairApplicationSettings, ResetApplicationSettings, ResetInterfaceSelection, ResetTrafficBudget, ResetWindowsNetworkStack, RunHealthProbe, SaveProxyNode, SelectInterfaces, SelectProxyChain, SelectProxyNode, SelectSingleInterface, SetAutostartEnabled, SetConnectionObservationEnabled, SetDNSSettings, SetIPv6Policy, SetProxyMode, SetProxyNodeEgress, SetProxyNodeFavorite, SetRoutingMode, SetRuleSettings, SetTrafficBudget, SpeedTestProxyNodes, StopCore, TestDNSServer, TestProxyChain, TestProxyNode, UnlockSecurityVault, UpdateProxyNode, UpdateSubscription, ValidateCoreConfiguration, ValidateSelectedProxyConfiguration } from '../wailsjs/go/main/App'
 import type { config, core, interfacemanager, interfaces, main, nodes, observability, processrules, rulesettings, srssets, subscriptions } from '../wailsjs/go/models'
 import { EventsOn } from '../wailsjs/runtime/runtime'
 import type { ApplicationStatus } from './vite-env'
@@ -16,6 +16,7 @@ const snapshot = ref<interfacemanager.Snapshot>()
 const coreStatus = ref<core.Status>({ state: 'stopped', generation: 0, restart_attempts: 0, abnormal: false })
 const recoveryStatus = ref<RecoveryStatus>({ state: 'idle', desired_running: false, attempts: 0 })
 const view = ref<View>('overview')
+const routingMode = ref<'single' | 'dual'>('single')
 const selectedA = ref('')
 const selectedB = ref('')
 const busy = ref(false)
@@ -24,6 +25,13 @@ const error = ref('')
 const sameAdapterWarning = ref(false)
 
 watch([selectedA, selectedB], ([newA, newB]) => {
+  if (routingMode.value === 'single') {
+    sameAdapterWarning.value = false
+    if (error.value.includes('不能绑定相同网卡')) {
+      error.value = ''
+    }
+    return
+  }
   if (sameAdapterWarning.value && newA && newB && newA !== newB) {
     sameAdapterWarning.value = false
     if (error.value.includes('不能绑定相同网卡')) {
@@ -251,11 +259,16 @@ const masterRows = computed<MasterRow[]>(() => {
   for (const source of srsSources.value) if (!seen.has(`srs:${source.id}`)) rows.push({ key: `srs:${source.id}`, kind: 'srs', source })
   return rows
 })
-const hasSavedSelection = computed(() => snapshot.value?.interface_a.status === 'resolved' && snapshot.value?.interface_b.status === 'resolved')
+const hasSavedSelection = computed(() => {
+  if (routingMode.value === 'single') {
+    return snapshot.value?.interface_a.status === 'resolved'
+  }
+  return snapshot.value?.interface_a.status === 'resolved' && snapshot.value?.interface_b.status === 'resolved'
+})
 const isRunning = computed(() => coreStatus.value.state === 'running')
 const isRecovering = computed(() => ['stopping', 'waiting-for-network', 'recovering'].includes(recoveryStatus.value.state))
 const filteredLogs = computed(() => logFilter.value === 'all' ? logs.value : logs.value.filter(entry => entry.level === logFilter.value))
-const directPrefixes = computed(() => (snapshot.value?.topology.prefixes ?? []).filter(prefix => prefix.action === 'bind-interface' && (ipv6Policy.value === 'split' || !prefix.prefix.includes(':')) && !prefix.prefix.startsWith('fe80:') && (prefix.adapter_guid === selectedA.value || prefix.adapter_guid === selectedB.value)))
+const directPrefixes = computed(() => (snapshot.value?.topology.prefixes ?? []).filter(prefix => prefix.action === 'bind-interface' && (ipv6Policy.value === 'split' || !prefix.prefix.includes(':')) && !prefix.prefix.startsWith('fe80:') && (prefix.adapter_guid === selectedA.value || (routingMode.value === 'dual' && prefix.adapter_guid === selectedB.value))))
 const blockingDiagnostics = computed(() => (snapshot.value?.diagnostics ?? []).filter(item => item.severity === 'error'))
 const selectedProxyNode = computed(() => proxyNodes.value.find(node => node.selected))
 const isChainMode = computed(() => proxySelection.value?.mode === 'chain' && (proxyNodes.value?.length || 0) > 0)
@@ -479,10 +492,37 @@ function sampleTraffic(counters: observability.InterfaceCounter[]) {
 
 function syncSelection(next: interfacemanager.Snapshot) {
   snapshot.value = next
+  if (next.mode === 'dual' || next.mode === 'single') {
+    routingMode.value = next.mode
+  } else if (!next.interface_b?.saved?.guid && candidates.value.length < 2) {
+    routingMode.value = 'single'
+  }
   if (!selectedA.value && next.interface_a.match) selectedA.value = next.interface_a.match.adapter.guid
   if (!selectedB.value && next.interface_b.match) selectedB.value = next.interface_b.match.adapter.guid
   if (!selectedA.value && next.candidates[0]) selectedA.value = next.candidates[0].adapter.guid
-  if (!selectedB.value) selectedB.value = next.candidates.find(candidate => candidate.adapter.guid !== selectedA.value)?.adapter.guid ?? ''
+  if (routingMode.value === 'dual') {
+    if (!selectedB.value) selectedB.value = next.candidates.find(candidate => candidate.adapter.guid !== selectedA.value)?.adapter.guid ?? ''
+  }
+}
+
+async function switchRoutingMode(mode: 'single' | 'dual') {
+  if (routingMode.value === mode) return
+  if (isRunning.value) {
+    window.alert('更改分流模式前，请先停止分流核心。')
+    return
+  }
+  routingMode.value = mode
+  sameAdapterWarning.value = false
+  if (error.value.includes('不能绑定相同网卡') || error.value.includes('前缀重叠') || error.value.includes('冲突')) {
+    error.value = ''
+  }
+  try {
+    const next = await SetRoutingMode(mode)
+    syncSelection(next)
+    addLog('info', `已切换分流模式：${mode === 'single' ? '单网卡代理模式' : '双网卡物理分流模式'}`)
+  } catch (err) {
+    addLog('warning', `切换模式预检：${messageOf(err)}`)
+  }
 }
 
 async function refreshStatus() {
@@ -1479,6 +1519,30 @@ async function deleteSubscription(item: subscriptions.Subscription) {
 async function saveSelection() {
   error.value = ''
   notice.value = ''
+  if (routingMode.value === 'single') {
+    if (!selectedA.value || !selectedAdapterA.value) {
+      const msg = '请选择出网物理网卡。'
+      error.value = msg
+      window.alert(`警告：${msg}`)
+      return
+    }
+    sameAdapterWarning.value = false
+    const changing = hasSavedSelection.value && (snapshot.value?.interface_a.match?.adapter.guid !== selectedA.value)
+    if (changing && !window.confirm('更改网卡会使当前策略失效。确认保存新的出网网卡吗？')) return
+    busy.value = true
+    try {
+      const next = await SelectSingleInterface(selectedA.value)
+      syncSelection(next)
+      notice.value = '单网卡选择已保存，预检信息已更新。'
+      addLog('info', `已选择出网网卡：${selectedAdapterA.value?.friendly_name}`)
+      view.value = 'overview'
+    } catch (reason) {
+      error.value = `无法保存网卡：${messageOf(reason)}`
+      addLog('error', error.value, true)
+    } finally { busy.value = false }
+    return
+  }
+
   if (!selectedA.value || !selectedB.value || !selectedAdapterA.value || !selectedAdapterB.value) {
     const msg = '请为出口 A 和出口 B 分别选择可用的物理网卡。'
     error.value = msg
@@ -1511,13 +1575,15 @@ async function saveSelection() {
 
 function buildConfig(): config.MVPConfig {
   const interfaceA = selectedAdapterA.value
-  const interfaceB = selectedAdapterB.value
-  if (!interfaceA || !interfaceB || !snapshot.value?.tun) throw new Error('接口或 TUN 前缀尚未就绪')
+  const isSingle = routingMode.value === 'single'
+  const interfaceB = isSingle ? undefined : selectedAdapterB.value
+  if (!interfaceA || (!interfaceB && !isSingle) || !snapshot.value?.tun) throw new Error('接口或 TUN 前缀尚未就绪')
   return {
     schema_version: 1,
+    mode: routingMode.value,
     tun: { prefix: snapshot.value.tun.prefix, stack: 'system' },
     interface_a: { guid: interfaceA.guid, bind_interface: interfaceA.friendly_name },
-    interface_b: { guid: interfaceB.guid, bind_interface: interfaceB.friendly_name },
+    interface_b: interfaceB ? { guid: interfaceB.guid, bind_interface: interfaceB.friendly_name } : { guid: '', bind_interface: '' },
     default_outbound: defaultOutbound.value,
     direct_prefixes: directPrefixes.value.map(item => ({ prefix: item.prefix, bind_interface: item.adapter_name })),
     rule_order: ruleOrder.value,
@@ -1545,7 +1611,9 @@ function updateRuleUpdateOutbound(value: 'auto' | 'a' | 'b' | 'c') {
 function formatRuleAction(action: RuleAction): string {
   switch (action) {
     case 'a':
-      return `出口 A · ${selectedAdapterA.value?.friendly_name ?? '网卡 A'}`
+      return routingMode.value === 'single'
+        ? `直连 · ${selectedAdapterA.value?.friendly_name ?? '主网卡'}`
+        : `出口 A · ${selectedAdapterA.value?.friendly_name ?? '网卡 A'}`
     case 'b':
       return `出口 B · ${selectedAdapterB.value?.friendly_name ?? '网卡 B'}`
     case 'c':
@@ -1556,7 +1624,7 @@ function formatRuleAction(action: RuleAction): string {
     case 'reject':
       return '阻断拒绝'
     case 'final':
-      return `跟随默认 (${defaultOutbound.value.toUpperCase()})`
+      return `跟随默认 (${defaultOutbound.value === 'a' && routingMode.value === 'single' ? '直连' : defaultOutbound.value.toUpperCase()})`
     default:
       return action
   }
@@ -1877,9 +1945,9 @@ onUnmounted(() => {
 
       <template v-if="view === 'overview'">
         <section class="summary" aria-label="运行状态">
-          <div><span>{{ t('overview.selection') }}</span><strong>{{ t(hasSavedSelection ? 'overview.completed' : 'overview.pending') }}</strong><small>{{ selectedAdapterA?.friendly_name ?? 'A' }} / {{ selectedAdapterB?.friendly_name ?? 'B' }}</small></div>
+          <div><span>{{ t('overview.selection') }}</span><strong>{{ t(hasSavedSelection ? 'overview.completed' : 'overview.pending') }}</strong><small>{{ routingMode === 'single' ? (selectedAdapterA?.friendly_name ?? '主网卡') : `${selectedAdapterA?.friendly_name ?? 'A'} / ${selectedAdapterB?.friendly_name ?? 'B'}` }}</small></div>
           <div><span>{{ t('overview.core') }}</span><strong>{{ t(isRunning ? 'overview.applied' : 'overview.notApplied') }}</strong><small>{{ isRunning ? `PID ${coreStatus.pid}` : t('overview.networkUnmanaged') }}</small></div>
-          <div><span>{{ t('overview.verification') }}</span><strong>{{ t(isRunning ? 'overview.healthy' : 'overview.unverified') }}</strong><small>A {{ formatRate(latestTraffic.aDown + latestTraffic.aUp) }} · B {{ formatRate(latestTraffic.bDown + latestTraffic.bUp) }}</small></div>
+          <div><span>{{ t('overview.verification') }}</span><strong>{{ t(isRunning ? 'overview.healthy' : 'overview.unverified') }}</strong><small>{{ routingMode === 'single' ? `流量 ${formatRate(latestTraffic.aDown + latestTraffic.aUp)}` : `A ${formatRate(latestTraffic.aDown + latestTraffic.aUp)} · B ${formatRate(latestTraffic.bDown + latestTraffic.bUp)}` }}</small></div>
           <div><span>{{ t('overview.ipv6') }}</span><strong>{{ t('overview.blocked') }}</strong><small>{{ t('overview.leakProtection') }}</small></div>
         </section>
 
@@ -1889,10 +1957,10 @@ onUnmounted(() => {
         </section>
         <template v-else>
           <section class="mode-row" aria-label="默认出口策略">
-            <div><p class="section-kicker">{{ t('overview.runMode') }}</p><strong>{{ defaultOutbound === 'a' ? `出口 A (${selectedAdapterA?.friendly_name ?? '网卡 A'})` : defaultOutbound === 'c' ? (isChainMode && isChainReady ? `出口 C (链式套接: ${chainSummaryText})` : `出口 C (代理: ${proxyNodes.find(n => n.selected)?.name ?? '未选择'})`) : `出口 B (${selectedAdapterB?.friendly_name ?? '网卡 B'})` }}</strong></div>
+            <div><p class="section-kicker">{{ t('overview.runMode') }}</p><strong>{{ defaultOutbound === 'a' ? (routingMode === 'single' ? `直连 (${selectedAdapterA?.friendly_name ?? '主网卡'})` : `出口 A (${selectedAdapterA?.friendly_name ?? '网卡 A'})`) : defaultOutbound === 'c' ? (isChainMode && isChainReady ? `出口 C (链式套接: ${chainSummaryText})` : `出口 C (代理: ${proxyNodes.find(n => n.selected)?.name ?? '未选择'})`) : `出口 B (${selectedAdapterB?.friendly_name ?? '网卡 B'})` }}</strong></div>
             <div class="mode-switch">
-              <button type="button" :class="{ active: defaultOutbound === 'a' }" :disabled="isRunning" @click="updateDefaultOutbound('a')">默认 A</button>
-              <button type="button" :class="{ active: defaultOutbound === 'b' }" :disabled="isRunning" @click="updateDefaultOutbound('b')">默认 B</button>
+              <button type="button" :class="{ active: defaultOutbound === 'a' }" :disabled="isRunning" @click="updateDefaultOutbound('a')">{{ routingMode === 'single' ? '默认直连' : '默认 A' }}</button>
+              <button v-if="routingMode === 'dual'" type="button" :class="{ active: defaultOutbound === 'b' }" :disabled="isRunning" @click="updateDefaultOutbound('b')">默认 B</button>
               <button type="button" :class="{ active: defaultOutbound === 'c' }" :disabled="isRunning" @click="updateDefaultOutbound('c')">默认 C (代理)</button>
             </div>
           </section>
@@ -1902,8 +1970,8 @@ onUnmounted(() => {
             <button v-else class="primary" type="button" :disabled="busy" @click="startCore"><span aria-hidden="true">▶</span>{{ t(busy ? 'overview.starting' : coreStatus.abnormal ? 'overview.restart' : 'overview.start') }}</button>
           </section>
           <section class="route-grid" aria-label="出口详情">
-            <article v-for="(adapter, role) in { A: selectedAdapterA, B: selectedAdapterB }" :key="role" class="route-row">
-              <span class="route-letter">{{ role }}</span><div><h3>{{ adapter?.friendly_name }}</h3><p>{{ t(role === 'A' ? 'overview.domestic' : 'overview.public') }}</p></div>
+            <article v-for="(adapter, role) in (routingMode === 'single' ? { '主网卡': selectedAdapterA } : { A: selectedAdapterA, B: selectedAdapterB })" :key="role" class="route-row">
+              <span class="route-letter">{{ routingMode === 'single' ? '网卡' : role }}</span><div><h3>{{ adapter?.friendly_name }}</h3><p>{{ routingMode === 'single' ? '主出网物理网卡（国内直连与代理底层出口）' : t(role === 'A' ? 'overview.domestic' : 'overview.public') }}</p></div>
               <dl><div><dt>{{ t('overview.status') }}</dt><dd>{{ statusText(adapter?.status ?? '') }}</dd></div><div><dt>{{ t('overview.address') }}</dt><dd>{{ adapter?.addresses?.[0]?.ip ?? t('common.none') }}</dd></div><div><dt>{{ t('overview.gateway') }}</dt><dd>{{ adapter?.gateways?.[0] ?? t('common.none') }}</dd></div></dl>
             </article>
             <article v-if="isChainMode && isChainReady && chainNodes[0] && chainNodes[chainNodes.length - 1]" class="route-row">
@@ -1911,7 +1979,7 @@ onUnmounted(() => {
               <dl><div><dt>模式</dt><dd>链式套接 ({{ chainNodes.length }} 跳)</dd></div><div><dt>前置跳板</dt><dd>{{ chainNodes[0]?.name ?? '跳板' }} (出口 {{ chainNodes[0]?.egress?.toUpperCase() ?? 'B' }})</dd></div><div><dt>落地出口</dt><dd>{{ chainNodes[chainNodes.length - 1]?.name ?? '落地' }}</dd></div><div><dt>整链状态</dt><dd>{{ chainTestResult?.available ? `可用 · ${chainTestResult.latency_ms}ms` : '链路就绪' }}</dd></div></dl>
             </article>
             <article v-else-if="proxyNodes.find(n => n.selected)" class="route-row">
-              <span class="route-letter alternate">C</span><div><h3>{{ proxyNodes.find(n => n.selected)?.name }}</h3><p>代理出站（底层经出口 {{ proxyNodes.find(n => n.selected)?.egress === 'a' ? 'A' : 'B' }}）</p></div>
+              <span class="route-letter alternate">C</span><div><h3>{{ proxyNodes.find(n => n.selected)?.name }}</h3><p>代理出站（底层经{{ routingMode === 'single' ? '主网卡' : ('出口 ' + (proxyNodes.find(n => n.selected)?.egress === 'a' ? 'A' : 'B')) }}）</p></div>
               <dl><div><dt>协议</dt><dd>{{ proxyNodes.find(n => n.selected)?.type.toUpperCase() }}</dd></div><div><dt>节点地址</dt><dd>{{ proxyNodes.find(n => n.selected)?.server }}:{{ proxyNodes.find(n => n.selected)?.port }}</dd></div><div><dt>状态</dt><dd>{{ proxyTests[proxyNodes.find(n => n.selected)?.id || '']?.available ? '可用' : '活动节点' }}</dd></div></dl>
             </article>
           </section>
@@ -1922,8 +1990,8 @@ onUnmounted(() => {
         <section class="monitor-summary" aria-label="连接与规则摘要">
           <div><span>{{ t('monitor.activeTcp') }}</span><strong>{{ observations.connections.active_tcp }}</strong><small>{{ observations.connections.established_tcp }} {{ t('monitor.established') }} · {{ observations.connections.listening_tcp }} {{ t('monitor.listening') }}</small></div>
           <div><span>{{ t('monitor.udp') }}</span><strong>{{ observations.connections.udp_endpoints }}</strong><small>{{ t('monitor.systemSnapshot') }}</small></div>
-          <div><span>{{ t('monitor.hitA') }}</span><strong>{{ ruleHitA }}</strong><small>{{ t('monitor.logWindow') }}</small></div>
-          <div><span>{{ t('monitor.hitB') }}</span><strong>{{ ruleHitB }}</strong><small>{{ t('monitor.logWindow') }}</small></div>
+          <div><span>{{ routingMode === 'single' ? '直连命中' : t('monitor.hitA') }}</span><strong>{{ ruleHitA }}</strong><small>{{ t('monitor.logWindow') }}</small></div>
+          <div v-if="routingMode === 'dual'"><span>{{ t('monitor.hitB') }}</span><strong>{{ ruleHitB }}</strong><small>{{ t('monitor.logWindow') }}</small></div>
         </section>
         <p v-if="observationsError" class="observation-error">监控采样失败：{{ observationsError }}。当前显示上一次可用数据。</p>
         <section v-if="observations.traffic_budget.enabled" :class="['budget-status', { warning: observations.traffic_budget.warning_reached }]" aria-live="polite">
@@ -1934,8 +2002,8 @@ onUnmounted(() => {
           <div class="traffic-section-heading"><div><p class="section-kicker">{{ t('monitor.interfaceTraffic') }}</p><h2>各网卡实时流量</h2></div><strong>仅供参考</strong></div>
           <p class="traffic-disclaimer">数据来自 Windows 物理网卡计数器，包含该网卡上其他应用的流量；“累计清零”仅重设本机显示基线，不修改系统计数器。数值仅供参考，可能在系统重启、驱动重置或网卡重连后变化，不等同于 WinRouter 分流量或运营商账单。</p>
           <div class="traffic-panels">
-            <article v-for="role in (['A', 'B'] as const)" :key="role" class="traffic-panel">
-              <div class="traffic-heading"><div><span>网卡 {{ role }}</span><h3>{{ role === 'A' ? (selectedAdapterA?.friendly_name ?? '未选择') : (selectedAdapterB?.friendly_name ?? '未选择') }}</h3></div><div class="traffic-heading-actions"><small>{{ role === 'A' ? '国内与局域网出口' : '其他公网出口' }}</small><button type="button" class="secondary" :disabled="!(role === 'A' ? counterA : counterB)" @click="resetInterfaceUsage(role)">累计清零</button></div></div>
+            <article v-for="role in (routingMode === 'single' ? (['A'] as const) : (['A', 'B'] as const))" :key="role" class="traffic-panel">
+              <div class="traffic-heading"><div><span>{{ routingMode === 'single' ? '物理主网卡' : `网卡 ${role}` }}</span><h3>{{ role === 'A' ? (selectedAdapterA?.friendly_name ?? '未选择') : (selectedAdapterB?.friendly_name ?? '未选择') }}</h3></div><div class="traffic-heading-actions"><small>{{ routingMode === 'single' ? '直连与代理底层出口' : (role === 'A' ? '国内与局域网出口' : '其他公网出口') }}</small><button type="button" class="secondary" :disabled="!(role === 'A' ? counterA : counterB)" @click="resetInterfaceUsage(role)">累计清零</button></div></div>
               <div class="traffic-totals">
                 <div><span>清零后累计下载</span><strong>{{ formatBytes(displayedUsage(role === 'A' ? counterA : counterB, 'received')) }}</strong></div>
                 <div><span>清零后累计上传</span><strong>{{ formatBytes(displayedUsage(role === 'A' ? counterA : counterB, 'transmitted')) }}</strong></div>
@@ -1965,35 +2033,95 @@ onUnmounted(() => {
       </template>
 
       <template v-else-if="view === 'interfaces'">
-        <section class="intro"><p>{{ setupRequired ? '选择两块当前可用的物理网卡。系统会持久化接口 GUID，并在网络变化时重新核对。' : '查看当前出口，或选择其他可用网卡。修改已保存的出口前会要求确认。' }}</p></section>
-        <section class="picker-grid">
-          <div class="picker"><label for="interface-a"><span class="route-letter">A</span><span><strong>出口 A</strong><small>国内与局域网</small></span></label><select id="interface-a" v-model="selectedA"><option value="" disabled>选择网卡</option><option v-for="item in candidates" :key="item.adapter.guid" :value="item.adapter.guid" :disabled="!item.eligible">{{ item.adapter.friendly_name }} · {{ statusText(item.adapter.status) }}</option></select></div>
-          <div class="picker"><label for="interface-b"><span class="route-letter alternate">B</span><span><strong>出口 B</strong><small>其他公网</small></span></label><select id="interface-b" v-model="selectedB"><option value="" disabled>选择网卡</option><option v-for="item in candidates" :key="item.adapter.guid" :value="item.adapter.guid" :disabled="!item.eligible">{{ item.adapter.friendly_name }} · {{ statusText(item.adapter.status) }}</option></select></div>
+        <section class="intro"><p>{{ setupRequired ? '选择工作模式及可用物理网卡。系统会持久化接口 GUID，并在网络变化时重新核对。' : '查看或修改网络出口模式与绑定的网卡。修改已保存的出口前会要求确认。' }}</p></section>
+
+        <!-- Mode selector card -->
+        <section class="mode-select-card" aria-label="工作模式选择">
+          <div class="mode-select-header">
+            <p class="section-kicker">工作模式</p>
+            <h2>{{ routingMode === 'single' ? '单网卡代理模式' : '双网卡物理分流模式' }}</h2>
+            <p>{{ routingMode === 'single' ? '适用于常规单网卡 PC/笔记本：所有国内与局域网直连流量以及代理节点连接共用单张物理网卡，系统自动配置回环防护。' : '适用于严格物理隔离环境：内网/受限网走网卡 A，公网/代理走网卡 B。单卡掉线时严格物理熔断阻断，绝不混流。' }}</p>
+          </div>
+          <div class="mode-tabs">
+            <button type="button" class="mode-tab-btn" :class="{ active: routingMode === 'single' }" :disabled="isRunning" @click="switchRoutingMode('single')">
+              <strong>单网卡代理模式</strong>
+              <small>仅需 1 块网卡 · 直连+代理</small>
+            </button>
+            <button type="button" class="mode-tab-btn" :class="{ active: routingMode === 'dual' }" :disabled="isRunning" @click="switchRoutingMode('dual')">
+              <strong>双网卡物理分流模式</strong>
+              <small>需 2 块物理网卡 · 安全隔离</small>
+            </button>
+          </div>
         </section>
-        <p v-if="sameAdapterWarning && selectedA && selectedA === selectedB" class="field-error" role="alert">出口 A 和出口 B 不能绑定相同网卡，请为两个出口分别选择不同的物理网卡。</p>
-        <section class="adapter-details" aria-label="所选网卡详情">
-          <article v-for="(adapter, role) in { A: selectedAdapterA, B: selectedAdapterB }" :key="role"><h3>出口 {{ role }} · {{ adapter?.friendly_name ?? '未选择' }}</h3><dl><div><dt>连接状态</dt><dd>{{ statusText(adapter?.status ?? '未知') }}</dd></div><div><dt>地址</dt><dd>{{ adapter?.addresses?.map(a => `${a.ip}/${a.prefix_length}`).join('、') || '无' }}</dd></div><div><dt>网关</dt><dd>{{ formatList(adapter?.gateways) }}</dd></div><div><dt>DNS</dt><dd>{{ formatList(adapter?.dns_servers) }}</dd></div></dl></article>
+
+        <section class="picker-grid" :class="{ 'single-picker': routingMode === 'single' }">
+          <div class="picker">
+            <label for="interface-a">
+              <span class="route-letter">A</span>
+              <span><strong>{{ routingMode === 'single' ? '物理主网卡' : '出口 A' }}</strong><small>{{ routingMode === 'single' ? '国内直连与代理底层' : '国内与局域网' }}</small></span>
+            </label>
+            <select id="interface-a" v-model="selectedA">
+              <option value="" disabled>选择网卡</option>
+              <option v-for="item in candidates" :key="item.adapter.guid" :value="item.adapter.guid" :disabled="!item.eligible">{{ item.adapter.friendly_name }} · {{ statusText(item.adapter.status) }}</option>
+            </select>
+          </div>
+          <div v-if="routingMode === 'dual'" class="picker">
+            <label for="interface-b">
+              <span class="route-letter alternate">B</span>
+              <span><strong>出口 B</strong><small>其他公网与代理底层</small></span>
+            </label>
+            <select id="interface-b" v-model="selectedB">
+              <option value="" disabled>选择网卡</option>
+              <option v-for="item in candidates" :key="item.adapter.guid" :value="item.adapter.guid" :disabled="!item.eligible">{{ item.adapter.friendly_name }} · {{ statusText(item.adapter.status) }}</option>
+            </select>
+          </div>
         </section>
-        <section class="policy-strip"><div><span>直连前缀</span><strong>{{ directPrefixes.map(item => item.prefix).join('、') || '选择后生成' }}</strong></div><div><span>DNS 策略</span><strong>国内经 A / 全球经 B，独立缓存</strong></div><div><span>IPv6 策略</span><strong>阻止</strong></div></section>
-        <section v-if="snapshot?.diagnostics?.length" class="diagnostics" aria-label="预检诊断"><h2>预检结果</h2><div v-for="item in snapshot.diagnostics" :key="item.code" :class="['diagnostic', item.severity]"><strong>{{ item.severity === 'error' ? '错误' : '提示' }} · {{ item.code }}</strong><span>{{ item.message }}</span><small>{{ item.severity === 'error' ? '请恢复网卡连接或重新选择出口后重试。' : '保存后将按当前拓扑生成配置。' }}</small></div></section>
-        <div class="actions"><button type="button" class="secondary" @click="view = 'overview'">取消</button><button type="button" class="primary" :disabled="busy" @click="saveSelection">{{ busy ? '正在保存' : '保存并继续' }}</button></div>
+        <p v-if="routingMode === 'dual' && sameAdapterWarning && selectedA && selectedA === selectedB" class="field-error" role="alert">出口 A 和出口 B 不能绑定相同网卡，请为两个出口分别选择不同的物理网卡。</p>
+        <section class="adapter-details" :class="{ 'single-adapter': routingMode === 'single' }" aria-label="所选网卡详情">
+          <article v-for="(adapter, role) in (routingMode === 'single' ? { '主网卡': selectedAdapterA } : { A: selectedAdapterA, B: selectedAdapterB })" :key="role">
+            <h3>{{ routingMode === 'single' ? '主网卡' : `出口 ${role}` }} · {{ adapter?.friendly_name ?? '未选择' }}</h3>
+            <dl>
+              <div><dt>连接状态</dt><dd>{{ statusText(adapter?.status ?? '未知') }}</dd></div>
+              <div><dt>地址</dt><dd>{{ adapter?.addresses?.map(a => `${a.ip}/${a.prefix_length}`).join('、') || '无' }}</dd></div>
+              <div><dt>网关</dt><dd>{{ formatList(adapter?.gateways) }}</dd></div>
+              <div><dt>DNS</dt><dd>{{ formatList(adapter?.dns_servers) }}</dd></div>
+            </dl>
+          </article>
+        </section>
+        <section class="policy-strip">
+          <div><span>直连前缀</span><strong>{{ directPrefixes.map(item => item.prefix).join('、') || '选择后生成' }}</strong></div>
+          <div><span>DNS 策略</span><strong>{{ routingMode === 'single' ? '国内直连经主网卡 / 代理经出口 C' : '国内经 A / 全球经 B，独立缓存' }}</strong></div>
+          <div><span>IPv6 策略</span><strong>阻止</strong></div>
+        </section>
+        <section v-if="snapshot?.diagnostics?.length" class="diagnostics" aria-label="预检诊断">
+          <h2>预检结果</h2>
+          <div v-for="item in snapshot.diagnostics" :key="item.code" :class="['diagnostic', item.severity]">
+            <strong>{{ item.severity === 'error' ? '错误' : '提示' }} · {{ item.code }}</strong>
+            <span>{{ item.message }}</span>
+            <small>{{ item.severity === 'error' ? '请恢复网卡连接或重新选择出口后重试。' : '保存后将按当前拓扑生成配置。' }}</small>
+          </div>
+        </section>
+        <div class="actions">
+          <button type="button" class="secondary" @click="view = 'overview'">取消</button>
+          <button type="button" class="primary" :disabled="busy || !selectedA || (routingMode === 'dual' && (!selectedB || selectedA === selectedB))" @click="saveSelection">{{ busy ? '正在保存' : '保存并继续' }}</button>
+        </div>
       </template>
 
       <template v-else-if="view === 'rules'">
         <section class="rule-outlet-map" aria-label="规则出口映射">
-          <article><span>网卡 A</span><strong>{{ selectedAdapterA?.friendly_name ?? '尚未选择' }}</strong><small>{{ selectedAdapterA?.addresses?.[0]?.ip ?? '无 IPv4 地址' }} · {{ selectedAdapterA?.gateways?.[0] ?? '无网关' }}</small></article>
-          <article><span>网卡 B</span><strong>{{ selectedAdapterB?.friendly_name ?? '尚未选择' }}</strong><small>{{ selectedAdapterB?.addresses?.[0]?.ip ?? '无 IPv4 地址' }} · {{ selectedAdapterB?.gateways?.[0] ?? '无网关' }}</small></article>
+          <article><span>{{ routingMode === 'single' ? '物理主网卡' : '网卡 A' }}</span><strong>{{ selectedAdapterA?.friendly_name ?? '尚未选择' }}</strong><small>{{ selectedAdapterA?.addresses?.[0]?.ip ?? '无 IPv4 地址' }} · {{ selectedAdapterA?.gateways?.[0] ?? '无网关' }}</small></article>
+          <article v-if="routingMode === 'dual'"><span>网卡 B</span><strong>{{ selectedAdapterB?.friendly_name ?? '尚未选择' }}</strong><small>{{ selectedAdapterB?.addresses?.[0]?.ip ?? '无 IPv4 地址' }} · {{ selectedAdapterB?.gateways?.[0] ?? '无网关' }}</small></article>
         </section>
         <section class="policy-strip" aria-label="当前 DNS 出口">
-          <div><span>{{ selectedAdapterA?.friendly_name ?? '网卡 A' }} DNS</span><strong>{{ dnsSettings.domestic.type.toUpperCase() }} · {{ dnsSettings.domestic.server }}:{{ dnsSettings.domestic.port }}</strong></div>
-          <div><span>{{ selectedAdapterB?.friendly_name ?? '网卡 B' }} DNS</span><strong>{{ dnsSettings.global.type.toUpperCase() }} · {{ dnsSettings.global.server }}:{{ dnsSettings.global.port }}</strong></div>
+          <div><span>{{ selectedAdapterA?.friendly_name ?? (routingMode === 'single' ? '主网卡' : '网卡 A') }} DNS</span><strong>{{ dnsSettings.domestic.type.toUpperCase() }} · {{ dnsSettings.domestic.server }}:{{ dnsSettings.domestic.port }}</strong></div>
+          <div v-if="routingMode === 'dual'"><span>{{ selectedAdapterB?.friendly_name ?? '网卡 B' }} DNS</span><strong>{{ dnsSettings.global.type.toUpperCase() }} · {{ dnsSettings.global.server }}:{{ dnsSettings.global.port }}</strong></div>
           <div><span>出口 C (代理) DNS</span><strong>{{ (dnsSettings.proxy?.type ?? dnsSettings.global.type).toUpperCase() }} · {{ dnsSettings.proxy?.server ?? dnsSettings.global.server }}:{{ dnsSettings.proxy?.port ?? dnsSettings.global.port }}</strong></div>
         </section>
         <section class="fallback-outbound" aria-label="未匹配流量兜底出口">
           <div><strong>未匹配流量兜底出口</strong><small>未命中自定义规则的流量将从此出口发出。</small></div>
           <select :value="defaultOutbound" :disabled="isRunning" @change="updateDefaultOutbound(($event.target as HTMLSelectElement).value as 'a' | 'b' | 'c')">
-            <option value="a">出口 A · {{ selectedAdapterA?.friendly_name ?? '未选择' }}</option>
-            <option value="b">出口 B · {{ selectedAdapterB?.friendly_name ?? '未选择' }}</option>
+            <option value="a">{{ routingMode === 'single' ? '直连 (主网卡) · ' : '出口 A · ' }}{{ selectedAdapterA?.friendly_name ?? '未选择' }}</option>
+            <option v-if="routingMode === 'dual'" value="b">出口 B · {{ selectedAdapterB?.friendly_name ?? '未选择' }}</option>
             <option value="c">出口 C · 代理出站 ({{ isChainMode && isChainReady ? `套接: ${chainSummaryText}` : (proxyNodes.find(n => n.selected)?.name ?? '未配置') }})</option>
           </select>
         </section>
@@ -2002,8 +2130,8 @@ onUnmounted(() => {
           <select :value="ruleUpdateOutbound" @change="updateRuleUpdateOutbound(($event.target as HTMLSelectElement).value as 'auto' | 'a' | 'b' | 'c')">
             <option value="auto">自动选择 (代理就绪优先走代理，无代理走直连)</option>
             <option value="c">出口 C · 代理出站 ({{ isChainMode && isChainReady ? `套接: ${chainSummaryText}` : (proxyNodes.find(n => n.selected)?.name ?? '未配置') }})</option>
-            <option value="b">出口 B · {{ selectedAdapterB?.friendly_name ?? '网卡 B' }}</option>
-            <option value="a">出口 A · {{ selectedAdapterA?.friendly_name ?? '网卡 A' }}</option>
+            <option v-if="routingMode === 'dual'" value="b">出口 B · {{ selectedAdapterB?.friendly_name ?? '网卡 B' }}</option>
+            <option value="a">{{ routingMode === 'single' ? '主网卡直连 · ' : '出口 A · ' }}{{ selectedAdapterA?.friendly_name ?? '网卡 A' }}</option>
           </select>
         </section>
         <section class="rules-heading">
@@ -2016,8 +2144,8 @@ onUnmounted(() => {
           <label>匹配类型<select v-model="ruleForm.type" :disabled="Boolean(ruleForm.id)"><option value="domain-suffix">域名后缀</option><option value="domain">精确域名</option><option value="ip">IPv4 CIDR</option><option value="process-name">进程名称</option><option value="process-path">进程完整路径</option><option value="rule-set">SRS 规则集</option></select></label>
           <label v-if="ruleForm.type === 'rule-set'">来源预设<select v-model="srsForm.preset_id" @change="chooseSRSPreset"><option value="">自定义 HTTPS 地址</option><option v-for="preset in srsPresets" :key="preset.id" :value="preset.id">{{ preset.name }}</option></select></label>
           <label>目标出口<select v-model="ruleForm.action">
-            <option value="a">出口 A · {{ selectedAdapterA?.friendly_name ?? '网卡 A' }}</option>
-            <option value="b">出口 B · {{ selectedAdapterB?.friendly_name ?? '网卡 B' }}</option>
+            <option value="a">{{ routingMode === 'single' ? '直连 (主网卡) · ' : '出口 A · ' }}{{ selectedAdapterA?.friendly_name ?? '网卡 A' }}</option>
+            <option v-if="routingMode === 'dual'" value="b">出口 B · {{ selectedAdapterB?.friendly_name ?? '网卡 B' }}</option>
             <option value="c">出口 C · 代理出站</option>
             <option value="final">跟随默认出口</option>
             <option value="reject">阻断拒绝</option>
@@ -2053,9 +2181,9 @@ onUnmounted(() => {
         </section>
         <section class="outlet-rule-columns" aria-label="出口 DNS 设置">
           <article class="outlet-rule-group">
-            <header><span>出口 A DNS</span><h3>{{ selectedAdapterA?.friendly_name ?? '网卡 A' }}</h3><small>管理该出口使用的域名解析服务</small></header>
+            <header><span>{{ routingMode === 'single' ? '主网卡直连 DNS' : '出口 A DNS' }}</span><h3>{{ selectedAdapterA?.friendly_name ?? '网卡 A' }}</h3><small>管理该出口使用的域名解析服务</small></header>
             <details class="outlet-dns-settings">
-              <summary class="outlet-dns-heading"><strong>出口 A DNS</strong><small>{{ dnsSettings.domestic.type.toUpperCase() }} · {{ dnsSettings.domestic.server }}:{{ dnsSettings.domestic.port }}</small></summary>
+              <summary class="outlet-dns-heading"><strong>{{ routingMode === 'single' ? '主网卡直连 DNS' : '出口 A DNS' }}</strong><small>{{ dnsSettings.domestic.type.toUpperCase() }} · {{ dnsSettings.domestic.server }}:{{ dnsSettings.domestic.port }}</small></summary>
               <div class="dns-row">
                 <label>DNS 预设<select v-model="dnsSettings.domestic.preset_id" :disabled="dnsBusy" @change="dnsSettings.domestic.preset_id ? chooseDNSPreset('domestic') : setCustomDNS('domestic')"><option value="">自定义</option><option v-for="preset in dnsPresets.filter(item => item.scope === 'domestic')" :key="preset.id" :value="preset.id">{{ preset.name }}</option></select></label>
                 <label>协议<select v-model="dnsSettings.domestic.type" :disabled="dnsBusy || Boolean(dnsSettings.domestic.preset_id)" @change="setCustomDNS('domestic')"><option value="udp">UDP</option><option value="tls">DoT</option><option value="https">DoH</option></select></label>
@@ -2064,10 +2192,10 @@ onUnmounted(() => {
                 <label :class="{ 'dns-field-placeholder': dnsSettings.domestic.type === 'udp' }">TLS 域名<input v-model.trim="dnsSettings.domestic.server_name" :required="dnsSettings.domestic.type !== 'udp'" :disabled="dnsSettings.domestic.type === 'udp'" :readonly="Boolean(dnsSettings.domestic.preset_id)" :placeholder="dnsSettings.domestic.type === 'udp' ? 'UDP 不需要' : 'dns.example.com'" @input="setCustomDNS('domestic')"></label>
                 <button type="button" class="dns-test" :class="dnsTests.domestic" :disabled="dnsTests.domestic === 'testing' || dnsBusy || isRunning" @click="testDNSServer('domestic')">{{ dnsTests.domestic === 'testing' ? '测试中' : dnsTests.domestic === 'success' ? '成功' : dnsTests.domestic === 'failed' ? '失败' : '测试' }}</button>
               </div>
-              <div class="dns-actions"><button type="button" class="primary" :disabled="dnsBusy || isRunning" @click="saveDNSSettings">{{ dnsBusy ? '正在校验' : '保存 A DNS' }}</button></div>
+              <div class="dns-actions"><button type="button" class="primary" :disabled="dnsBusy || isRunning" @click="saveDNSSettings">{{ dnsBusy ? '正在校验' : (routingMode === 'single' ? '保存直连 DNS' : '保存 A DNS') }}</button></div>
             </details>
           </article>
-          <article class="outlet-rule-group">
+          <article v-if="routingMode === 'dual'" class="outlet-rule-group">
             <header><span>出口 B DNS</span><h3>{{ selectedAdapterB?.friendly_name ?? '网卡 B' }}</h3><small>管理该出口使用的域名解析服务</small></header>
             <details class="outlet-dns-settings">
               <summary class="outlet-dns-heading"><strong>出口 B DNS</strong><small>{{ dnsSettings.global.type.toUpperCase() }} · {{ dnsSettings.global.server }}:{{ dnsSettings.global.port }}</small></summary>
@@ -2202,7 +2330,7 @@ onUnmounted(() => {
           </div>
           <div v-else-if="chainNodes.length >= 2 && chainNodes[0] && chainNodes[chainNodes.length - 1]" class="chain-alert info">
             <div class="chain-alert-left">
-              <span>链路就绪：从 <strong>网卡 {{ chainNodes[0]?.egress?.toUpperCase() ?? 'B' }}</strong> 发起连接 ➔ <strong>{{ chainNodes[0]?.name }}</strong> ➔ 落地于 <strong>{{ chainNodes[chainNodes.length - 1]?.name }}</strong></span>
+              <span>链路就绪：从 <strong>{{ routingMode === 'single' ? '主网卡' : `网卡 ${chainNodes[0]?.egress?.toUpperCase() ?? 'B'}` }}</strong> 发起连接 ➔ <strong>{{ chainNodes[0]?.name }}</strong> ➔ 落地于 <strong>{{ chainNodes[chainNodes.length - 1]?.name }}</strong></span>
             </div>
             <div v-if="chainTestResult" class="chain-test-badge" :class="chainTestResult.available ? 'test-ok' : 'test-failed'">
               <template v-if="chainTestResult.available">
@@ -2250,7 +2378,7 @@ onUnmounted(() => {
             <input v-model.trim="proxyForm.name" required maxlength="80" placeholder="例如：办公代理">
             <span v-if="proxyFieldErrors.name" class="field-error-msg">{{ proxyFieldErrors.name }}</span>
           </label>
-          <label>
+          <label v-if="routingMode === 'dual'">
             物理出口
             <select v-model="proxyForm.egress">
               <option value="b">接口 B（默认）</option>
@@ -2430,9 +2558,10 @@ onUnmounted(() => {
               <span v-if="isChainMode && isNodeInChain(node.id)" class="chain-pos-badge">
                 第 {{ chainNodeHopIndex(node.id) + 1 }} 跳 {{ chainNodeHopIndex(node.id) === 0 ? '(前置跳板)' : (chainNodeHopIndex(node.id) === (proxySelection?.selected_chain?.length || 0) - 1 && (proxySelection?.selected_chain?.length || 0) > 1) ? '(落地出口)' : '' }}
               </span>
-              <span :class="['proxy-meta-tag', { 'overridden-egress-tag': node.egress_overridden }]" :title="node.egress_overridden ? '此节点已单独自定义出口网卡' : undefined">
+              <span v-if="routingMode === 'dual'" :class="['proxy-meta-tag', { 'overridden-egress-tag': node.egress_overridden }]" :title="node.egress_overridden ? '此节点已单独自定义出口网卡' : undefined">
                 {{ node.egress === 'a' ? '出口 A' : '出口 B' }}<template v-if="node.egress_overridden"> (已覆盖)</template>
               </span>
+              <span v-else class="proxy-meta-tag">主网卡出站</span>
               <span v-for="tag in formatProxySummary(node)" :key="tag" class="proxy-meta-tag">{{ tag }}</span>
               <span :class="['credential-tag', { none: !(node.has_secret || node.has_password) }]">
                 {{ (node.has_secret || node.has_password) ? '🔒 已保存凭据' : '未设凭据' }}
@@ -2479,6 +2608,7 @@ onUnmounted(() => {
               </template>
               <template v-else>
                 <button
+                  v-if="routingMode === 'dual'"
                   class="secondary"
                   type="button"
                   :disabled="isRunning"
@@ -2494,7 +2624,7 @@ onUnmounted(() => {
         <form v-if="subscriptionFormOpen" class="subscription-form" @submit.prevent="saveSubscription">
           <label>订阅名称<input v-model.trim="subscriptionForm.name" required maxlength="80"></label>
           <label>HTTPS / 局域网 HTTP 地址<input v-model.trim="subscriptionForm.url" :required="!subscriptionForm.id" type="url" :placeholder="subscriptionForm.id ? '留空则保留加密地址' : 'https://example.com/nodes.json 或 http://192.168.1.50/nodes.json'"></label>
-          <label>默认出口网卡
+          <label v-if="routingMode === 'dual'">默认出口网卡
             <select v-model="subscriptionForm.egress">
               <option value="b">出口 B (海外/代理出口)</option>
               <option value="a">出口 A (国内/直连出口)</option>
@@ -2504,7 +2634,7 @@ onUnmounted(() => {
         </form>
         <section class="subscription-list" aria-label="订阅列表">
           <div v-if="!subscriptionList.length" class="proxy-empty">尚未添加订阅。</div>
-          <article v-for="item in subscriptionList" :key="item.id"><div><strong>{{ item.name }}</strong><small>{{ item.host }} · {{ item.node_count }} 个节点 · 默认出口 {{ item.egress === 'a' ? 'A' : 'B' }}</small><span v-if="item.last_error" class="test-failed">{{ item.last_error }}</span></div><div class="proxy-actions"><button class="secondary" type="button" :disabled="refreshingSubscriptionID === item.id" @click="refreshSubscription(item)">{{ refreshingSubscriptionID === item.id ? '更新中' : '更新' }}</button><button class="secondary" type="button" @click="editSubscription(item)">编辑</button><button class="delete-button" type="button" @click="deleteSubscription(item)">删除</button></div></article>
+          <article v-for="item in subscriptionList" :key="item.id"><div><strong>{{ item.name }}</strong><small>{{ item.host }} · {{ item.node_count }} 个节点<template v-if="routingMode === 'dual'"> · 默认出口 {{ item.egress === 'a' ? 'A' : 'B' }}</template></small><span v-if="item.last_error" class="test-failed">{{ item.last_error }}</span></div><div class="proxy-actions"><button class="secondary" type="button" :disabled="refreshingSubscriptionID === item.id" @click="refreshSubscription(item)">{{ refreshingSubscriptionID === item.id ? '更新中' : '更新' }}</button><button class="secondary" type="button" @click="editSubscription(item)">编辑</button><button class="delete-button" type="button" @click="deleteSubscription(item)">删除</button></div></article>
         </section>
       </template>
 
@@ -2516,7 +2646,7 @@ onUnmounted(() => {
          <section class="probe-panel">
           <div><p class="section-kicker">主动健康探测</p><h2>验证出口路径</h2></div>
           <label>协议<select v-model="probeProtocol"><option value="tcp">TCP</option><option value="udp">UDP</option><option value="dns">DNS</option></select></label>
-          <label>预期出口<select v-model="probeRole"><option value="A">出口 A</option><option value="B">出口 B</option></select></label>
+          <label>预期出口<select v-model="probeRole"><option value="A">{{ routingMode === 'single' ? '主网卡' : '出口 A' }}</option><option v-if="routingMode === 'dual'" value="B">出口 B</option></select></label>
           <label class="probe-target">目标<input v-model="probeTarget" :placeholder="probeProtocol === 'dns' ? '223.5.5.5:53' : '1.1.1.1:443'"></label>
           <label v-if="probeProtocol === 'dns'" class="probe-target">查询名称<input v-model="probeDNSName"></label>
           <button class="secondary" type="button" :disabled="busy || !probeTarget" @click="runProbe">运行探测</button>

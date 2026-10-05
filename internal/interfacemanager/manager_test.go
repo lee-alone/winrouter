@@ -620,3 +620,70 @@ func TestManagerIPv6TUNPrefixConflictDiagnostics(t *testing.T) {
 		t.Fatalf("snapshot.TUN = %#v, want 172.19.0.0/30 preserved", snapshot.TUN)
 	}
 }
+
+func TestManagerSelectSingle(t *testing.T) {
+	first := adapter("{A}", "00:00:00:00:00:01", "Ethernet A", "192.168.10.2", 24)
+	routeTable := []routes.Route{{Prefix: "0.0.0.0/0", InterfaceIndex: first.Index}}
+	path := filepath.Join(t.TempDir(), "interfaces.json")
+	manager := newTestManager(t, path, func() []interfaces.Adapter { return []interfaces.Adapter{first} }, routeTable)
+
+	snapshot, err := manager.SelectSingle(first)
+	if err != nil {
+		t.Fatalf("SelectSingle() error: %v", err)
+	}
+	if snapshot.Mode != ModeSingle {
+		t.Fatalf("snapshot.Mode = %q, want %q", snapshot.Mode, ModeSingle)
+	}
+	if snapshot.InterfaceA.Status != "resolved" {
+		t.Fatalf("snapshot.InterfaceA.Status = %q, want resolved", snapshot.InterfaceA.Status)
+	}
+	if snapshot.InterfaceB.Status != "disabled" {
+		t.Fatalf("snapshot.InterfaceB.Status = %q, want disabled", snapshot.InterfaceB.Status)
+	}
+	for _, diag := range snapshot.Diagnostics {
+		if diag.Severity == "error" {
+			t.Fatalf("unexpected blocking diagnostic in single mode: %#v", diag)
+		}
+	}
+	state, err := LoadState(path)
+	if err != nil {
+		t.Fatalf("LoadState() error: %v", err)
+	}
+	if state.Mode != ModeSingle || state.InterfaceA.GUID != first.GUID || state.InterfaceB.GUID != "" {
+		t.Fatalf("saved single state = %#v", state)
+	}
+}
+
+func TestSingleNICIgnoresOverlapConflict(t *testing.T) {
+	// Adapter A and Adapter B share the same subnet prefix (192.168.10.0/24)
+	first := adapter("{A}", "00:00:00:00:00:01", "Ethernet A", "192.168.10.2", 24)
+	first.Index = 10
+	second := adapter("{B}", "00:00:00:00:00:02", "Ethernet B", "192.168.10.3", 24)
+	second.Index = 20
+	routeTable := []routes.Route{
+		{Prefix: "0.0.0.0/0", InterfaceIndex: first.Index},
+		{Prefix: "0.0.0.0/0", InterfaceIndex: second.Index},
+	}
+	manager := newTestManager(t, "", func() []interfaces.Adapter { return []interfaces.Adapter{first, second} }, routeTable)
+
+	// In dual-NIC mode, selecting both produces a prefix-overlap error
+	dualSnapshot, err := manager.Select(first, second)
+	if err != nil {
+		t.Fatalf("Select() error: %v", err)
+	}
+	assertDiagnostic(t, dualSnapshot.Diagnostics, "prefix-overlap")
+
+	// In single-NIC mode, selecting only first adapter MUST NOT report prefix-overlap or same-interface
+	singleSnapshot, err := manager.SelectSingle(first)
+	if err != nil {
+		t.Fatalf("SelectSingle() error: %v", err)
+	}
+	assertNoDiagnostic(t, singleSnapshot.Diagnostics, "prefix-overlap")
+	assertNoDiagnostic(t, singleSnapshot.Diagnostics, "same-interface")
+	for _, diag := range singleSnapshot.Diagnostics {
+		if diag.Severity == "error" {
+			t.Fatalf("unexpected error diagnostic in single-NIC mode: %#v", diag)
+		}
+	}
+}
+

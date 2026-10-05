@@ -993,3 +993,63 @@ func TestGenerateMVPProxyChain(t *testing.T) {
 	}
 }
 
+func TestGenerateMVPSingleNIC(t *testing.T) {
+	input := fixtureInput(t)
+	input.Mode = ModeSingle
+	input.InterfaceB = MVPInterface{} // No second interface
+	input.DefaultOutbound = "c"
+	input.Proxy = &MVPProxy{
+		Type:     "shadowsocks",
+		Server:   "198.51.100.99",
+		Port:     8388,
+		Method:   "aes-128-gcm",
+		Password: "password123",
+	}
+
+	if err := ValidateMVPModel(input); err != nil {
+		t.Fatalf("ValidateMVPModel() failed for single-NIC mode: %v", err)
+	}
+
+	generated, err := GenerateMVP(input)
+	if err != nil {
+		t.Fatalf("GenerateMVP() failed for single-NIC mode: %v", err)
+	}
+
+	if err := ValidateMVPSemantics(generated); err != nil {
+		t.Fatalf("ValidateMVPSemantics() failed for single-NIC mode: %v", err)
+	}
+
+	// Verify outbounds
+	var proxyOutbound, domDirect *Outbound
+	for i := range generated.Model.Outbounds {
+		if generated.Model.Outbounds[i].Tag == "proxy" {
+			proxyOutbound = &generated.Model.Outbounds[i]
+		}
+		if generated.Model.Outbounds[i].Tag == "domestic-direct" {
+			domDirect = &generated.Model.Outbounds[i]
+		}
+	}
+	if proxyOutbound == nil || proxyOutbound.BindInterface != input.InterfaceA.BindInterface {
+		t.Fatalf("proxy outbound must be bound to InterfaceA in single-NIC mode: %#v", proxyOutbound)
+	}
+	if domDirect == nil || domDirect.BindInterface != input.InterfaceA.BindInterface {
+		t.Fatalf("domestic-direct must be bound to InterfaceA in single-NIC mode: %#v", domDirect)
+	}
+
+	// Verify loop-prevention rule
+	protected := false
+	for _, rule := range generated.Model.Route.Rules {
+		if rule.Outbound == "domestic-direct" {
+			for _, cidr := range rule.IPCIDR {
+				if cidr == "198.51.100.99/32" {
+					protected = true
+				}
+			}
+		}
+	}
+	if !protected {
+		t.Fatal("proxy server IP must be protected with domestic-direct loop prevention rule")
+	}
+}
+
+

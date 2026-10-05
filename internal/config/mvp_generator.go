@@ -64,14 +64,24 @@ func ValidateMVPModel(input MVPConfig) error {
 			return err
 		}
 	}
-	if strings.TrimSpace(input.InterfaceA.GUID) == "" || strings.TrimSpace(input.InterfaceB.GUID) == "" {
-		return fmt.Errorf("two interface GUIDs are required")
-	}
-	if strings.EqualFold(strings.Trim(input.InterfaceA.GUID, "{}"), strings.Trim(input.InterfaceB.GUID, "{}")) {
-		return fmt.Errorf("interface A and B must be different")
-	}
-	if strings.TrimSpace(input.InterfaceA.BindInterface) == "" || strings.TrimSpace(input.InterfaceB.BindInterface) == "" || strings.EqualFold(input.InterfaceA.BindInterface, input.InterfaceB.BindInterface) {
-		return fmt.Errorf("two distinct bind_interface values are required")
+	isSingle := input.Mode == ModeSingle || input.InterfaceB.GUID == ""
+	if isSingle {
+		if strings.TrimSpace(input.InterfaceA.GUID) == "" {
+			return fmt.Errorf("interface A GUID is required")
+		}
+		if strings.TrimSpace(input.InterfaceA.BindInterface) == "" {
+			return fmt.Errorf("interface A bind_interface is required")
+		}
+	} else {
+		if strings.TrimSpace(input.InterfaceA.GUID) == "" || strings.TrimSpace(input.InterfaceB.GUID) == "" {
+			return fmt.Errorf("two interface GUIDs are required")
+		}
+		if strings.EqualFold(strings.Trim(input.InterfaceA.GUID, "{}"), strings.Trim(input.InterfaceB.GUID, "{}")) {
+			return fmt.Errorf("interface A and B must be different")
+		}
+		if strings.TrimSpace(input.InterfaceA.BindInterface) == "" || strings.TrimSpace(input.InterfaceB.BindInterface) == "" || strings.EqualFold(input.InterfaceA.BindInterface, input.InterfaceB.BindInterface) {
+			return fmt.Errorf("two distinct bind_interface values are required")
+		}
 	}
 	prefix, err := netip.ParsePrefix(input.TUN.Prefix)
 	if err != nil || !prefix.Addr().Is4() || !prefix.Addr().IsPrivate() || prefix.Bits() != 30 || prefix != prefix.Masked() {
@@ -200,15 +210,25 @@ func GenerateMVP(input MVPConfig) (Generated, error) {
 		}
 		return directPrefixes[i].BindInterface < directPrefixes[j].BindInterface
 	})
+	isSingle := input.Mode == ModeSingle || input.InterfaceB.GUID == ""
+	interfaceBBind := input.InterfaceB.BindInterface
+	if isSingle {
+		interfaceBBind = input.InterfaceA.BindInterface
+	}
 	outbounds := []Outbound{
 		{Type: "direct", Tag: "local-direct"},
 		{Type: "direct", Tag: "domestic-direct", BindInterface: input.InterfaceA.BindInterface},
-		{Type: "direct", Tag: "foreign-direct", BindInterface: input.InterfaceB.BindInterface},
+		{Type: "direct", Tag: "foreign-direct", BindInterface: interfaceBBind},
+	}
+	effectiveDefault := input.DefaultOutbound
+	if effectiveDefault == "" && isSingle {
+		effectiveDefault = "a"
 	}
 	finalOutbound := "foreign-direct"
-	if input.DefaultOutbound == "a" {
+	switch effectiveDefault {
+	case "a":
 		finalOutbound = "domestic-direct"
-	} else if input.DefaultOutbound == "c" {
+	case "c":
 		finalOutbound = "proxy"
 	}
 	var proxyChain []MVPProxy
@@ -219,8 +239,8 @@ func GenerateMVP(input MVPConfig) (Generated, error) {
 	}
 
 	if len(proxyChain) > 0 {
-		entryBind := input.InterfaceB.BindInterface
-		if proxyChain[0].Egress == "a" {
+		entryBind := interfaceBBind
+		if isSingle || proxyChain[0].Egress == "a" {
 			entryBind = input.InterfaceA.BindInterface
 		}
 		if len(proxyChain) == 1 {
@@ -264,7 +284,7 @@ func GenerateMVP(input MVPConfig) (Generated, error) {
 	if len(proxyChain) > 0 {
 		if proxyAddress, err := netip.ParseAddr(proxyChain[0].Server); err == nil {
 			proxyPrefix := netip.PrefixFrom(proxyAddress, proxyAddress.BitLen()).String()
-			if proxyChain[0].Egress == "a" {
+			if isSingle || proxyChain[0].Egress == "a" {
 				infrastructureA = []string{proxyPrefix}
 			} else {
 				infrastructureB = []string{proxyPrefix}
@@ -333,7 +353,7 @@ func GenerateMVP(input MVPConfig) (Generated, error) {
 		case "c":
 			action, server = "route", "dns-proxy"
 		case "final":
-			action, server = "route", finalDNSResolver(input.DefaultOutbound)
+			action, server = "route", finalDNSResolver(effectiveDefault)
 		default:
 			continue
 		}
@@ -365,7 +385,7 @@ func GenerateMVP(input MVPConfig) (Generated, error) {
 		case "c":
 			action, server = "route", "dns-proxy"
 		case "final":
-			action, server = "route", finalDNSResolver(input.DefaultOutbound)
+			action, server = "route", finalDNSResolver(effectiveDefault)
 		case "reject":
 			action = "reject"
 		}
@@ -373,7 +393,7 @@ func GenerateMVP(input MVPConfig) (Generated, error) {
 			dnsRules = append(dnsRules, DNSRule{RuleSet: []string{ruleSet.Tag}, Action: action, Server: server})
 		}
 	}
-	finalDNS := finalDNSResolver(input.DefaultOutbound)
+	finalDNS := finalDNSResolver(effectiveDefault)
 	routeRuleSets := make([]RuleSet, 0, len(input.RuleSets))
 	for _, ruleSet := range input.RuleSets {
 		routeRuleSets = append(routeRuleSets, RuleSet{Type: "local", Tag: ruleSet.Tag, Format: "binary", Path: ruleSet.Path})
@@ -490,8 +510,8 @@ func GenerateMVP(input MVPConfig) (Generated, error) {
 	}
 	proxyBindInterface := ""
 	if len(proxyChain) > 0 {
-		proxyBindInterface = input.InterfaceB.BindInterface
-		if proxyChain[0].Egress == "a" {
+		proxyBindInterface = interfaceBBind
+		if isSingle || proxyChain[0].Egress == "a" {
 			proxyBindInterface = input.InterfaceA.BindInterface
 		}
 	}

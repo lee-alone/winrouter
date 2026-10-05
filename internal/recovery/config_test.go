@@ -57,3 +57,35 @@ func validConfig() config.MVPConfig {
 		IPv6: config.IPv6Block,
 	}
 }
+
+func TestRebuildConfigSingleNIC(t *testing.T) {
+	first := interfaces.Adapter{GUID: "{SINGLE-A}", FriendlyName: "Wi-Fi Only", Status: "up"}
+	allocation := tunprefix.Allocation{Prefix: "172.19.0.8/30"}
+	snapshot := interfacemanager.Snapshot{
+		Mode:       interfacemanager.ModeSingle,
+		InterfaceA: interfacemanager.ResolvedSelection{Status: "resolved", Match: &interfaces.Match{Adapter: first}},
+		InterfaceB: interfacemanager.ResolvedSelection{Role: "B", Status: "disabled"},
+		TUN:        &allocation,
+		Topology: interfaces.Topology{Prefixes: []interfaces.DirectPrefix{
+			{Prefix: "192.168.1.0/24", AdapterGUID: "single-a", AdapterName: "Wi-Fi Only", Action: interfaces.PrefixBindInterface},
+		}},
+	}
+	base := validConfig()
+	base.Mode = config.ModeSingle
+	base.InterfaceB = config.MVPInterface{}
+
+	rebuilt, err := RebuildConfig(base, snapshot)
+	if err != nil {
+		t.Fatalf("RebuildConfig() error in single mode: %v", err)
+	}
+	if rebuilt.InterfaceA.GUID != first.GUID || rebuilt.InterfaceA.BindInterface != first.FriendlyName {
+		t.Fatalf("rebuilt InterfaceA = %#v", rebuilt.InterfaceA)
+	}
+	if rebuilt.InterfaceB.GUID != "" {
+		t.Fatalf("rebuilt InterfaceB should be empty in single mode: %#v", rebuilt.InterfaceB)
+	}
+	if len(rebuilt.DirectPrefixes) != 1 {
+		t.Fatalf("direct prefixes count = %d, want 1", len(rebuilt.DirectPrefixes))
+	}
+}
+

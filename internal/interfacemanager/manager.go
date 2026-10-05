@@ -103,6 +103,63 @@ func (m *Manager) Refresh() (Snapshot, error) {
 	return cloneSnapshot(snapshot), nil
 }
 
+func (m *Manager) Mode() string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if m.state.Mode == "" {
+		if m.state.InterfaceB.GUID != "" {
+			return ModeDual
+		}
+		return ModeSingle
+	}
+	return m.state.Mode
+}
+
+func (m *Manager) SetMode(mode string) (Snapshot, error) {
+	if mode != ModeSingle && mode != ModeDual {
+		return Snapshot{}, fmt.Errorf("unsupported mode %q", mode)
+	}
+	m.mu.Lock()
+	previous := m.state
+	m.state.Mode = mode
+	if mode == ModeSingle {
+		m.state.InterfaceB = interfaces.Identity{}
+	}
+	state := m.state
+	m.mu.Unlock()
+	if m.options.StatePath != "" {
+		if err := SaveState(m.options.StatePath, state); err != nil {
+			m.mu.Lock()
+			m.state = previous
+			m.mu.Unlock()
+			return Snapshot{}, err
+		}
+	}
+	return m.Refresh()
+}
+
+func (m *Manager) SelectSingle(interfaceA interfaces.Adapter) (Snapshot, error) {
+	if interfaceA.GUID == "" || !interfaceA.Candidate {
+		return Snapshot{}, ErrSelectionInvalid
+	}
+	m.mu.Lock()
+	previous := m.state
+	m.state.Mode = ModeSingle
+	m.state.InterfaceA = interfaces.IdentityFromAdapter(interfaceA)
+	m.state.InterfaceB = interfaces.Identity{}
+	state := m.state
+	m.mu.Unlock()
+	if m.options.StatePath != "" {
+		if err := SaveState(m.options.StatePath, state); err != nil {
+			m.mu.Lock()
+			m.state = previous
+			m.mu.Unlock()
+			return Snapshot{}, err
+		}
+	}
+	return m.Refresh()
+}
+
 func (m *Manager) Select(interfaceA, interfaceB interfaces.Adapter) (Snapshot, error) {
 	if interfaceA.GUID == "" || interfaceB.GUID == "" {
 		return Snapshot{}, ErrSelectionInvalid
@@ -115,6 +172,7 @@ func (m *Manager) Select(interfaceA, interfaceB interfaces.Adapter) (Snapshot, e
 	}
 	m.mu.Lock()
 	previous := m.state
+	m.state.Mode = ModeDual
 	m.state.InterfaceA = interfaces.IdentityFromAdapter(interfaceA)
 	m.state.InterfaceB = interfaces.IdentityFromAdapter(interfaceB)
 	state := m.state
@@ -211,9 +269,18 @@ func (m *Manager) publish(event Event) {
 }
 
 func buildSnapshot(sequence uint64, state State, adapters []interfaces.Adapter, routeTable []routes.Route, pool []string) Snapshot {
+	mode := state.Mode
+	if mode == "" {
+		if state.InterfaceA.GUID != "" && state.InterfaceB.GUID == "" {
+			mode = ModeSingle
+		} else {
+			mode = ModeDual
+		}
+	}
 	topology := interfaces.BuildTopology(adapters)
 	snapshot := Snapshot{
 		Sequence:      sequence,
+		Mode:          mode,
 		Adapters:      adapters,
 		Routes:        routeTable,
 		Candidates:    BuildCandidates(adapters),
@@ -223,22 +290,55 @@ func buildSnapshot(sequence uint64, state State, adapters []interfaces.Adapter, 
 		Diagnostics:   make([]Diagnostic, 0),
 	}
 	snapshot.InterfaceA = resolveSelection("A", state.InterfaceA, adapters)
-	snapshot.InterfaceB = resolveSelection("B", state.InterfaceB, adapters)
-	if snapshot.InterfaceA.Match != nil && snapshot.InterfaceB.Match != nil && equalGUID(snapshot.InterfaceA.Match.Adapter.GUID, snapshot.InterfaceB.Match.Adapter.GUID) {
-		snapshot.Diagnostics = append(snapshot.Diagnostics, Diagnostic{Code: "same-interface", Severity: "error", Message: ErrSameAdapter.Error()})
+	if mode == ModeDual {
+		snapshot.InterfaceB = resolveSelection("B", state.InterfaceB, adapters)
+		if snapshot.InterfaceA.Match != nil && snapshot.InterfaceB.Match != nil && equalGUID(snapshot.InterfaceA.Match.Adapter.GUID, snapshot.InterfaceB.Match.Adapter.GUID) {
+			snapshot.Diagnostics = append(snapshot.Diagnostics, Diagnostic{Code: "same-interface", Severity: "error", Message: ErrSameAdapter.Error()})
+		}
+	} else {
+		snapshot.InterfaceB = ResolvedSelection{Role: "B", Status: "disabled"}
 	}
-	for _, selection := range []ResolvedSelection{snapshot.InterfaceA, snapshot.InterfaceB} {
+	checkedSelections := []ResolvedSelection{snapshot.InterfaceA}
+	if mode == ModeDual {
+		checkedSelections = append(checkedSelections, snapshot.InterfaceB)
+	}
+	for _, selection := range checkedSelections {
 		if selection.Status == "resolved" && selection.Match != nil && !hasIPv4DefaultRoute(routeTable, selection.Match.Adapter) {
 			snapshot.Diagnostics = append(snapshot.Diagnostics, Diagnostic{Code: "missing-default-route-" + strings.ToLower(selection.Role), Severity: "error", Message: fmt.Sprintf("selected interface %s (%s) has no IPv4 default route", selection.Role, selection.Match.Adapter.FriendlyName)})
 		}
 	}
-	for _, overlap := range topology.Overlaps {
-		if overlap.RequiresSelection && overlapBlocksPolicy(overlap, state.IPv6Policy) {
-			snapshot.Diagnostics = append(snapshot.Diagnostics, Diagnostic{Code: "prefix-overlap", Severity: "error", Message: fmt.Sprintf("%s on %s overlaps %s on %s", overlap.First.Prefix, overlap.First.AdapterName, overlap.Second.Prefix, overlap.Second.AdapterName)})
+	if mode == ModeDual {
+		var guidA, guidB string
+		if snapshot.InterfaceA.Match != nil {
+			guidA = strings.ToLower(strings.Trim(snapshot.InterfaceA.Match.Adapter.GUID, "{}"))
+		}
+		if snapshot.InterfaceB.Match != nil {
+			guidB = strings.ToLower(strings.Trim(snapshot.InterfaceB.Match.Adapter.GUID, "{}"))
+		}
+		for _, overlap := range topology.Overlaps {
+			if overlap.RequiresSelection && overlapBlocksPolicy(overlap, state.IPv6Policy) {
+				firstGuid := strings.ToLower(strings.Trim(overlap.First.AdapterGUID, "{}"))
+				secondGuid := strings.ToLower(strings.Trim(overlap.Second.AdapterGUID, "{}"))
+				if guidA != "" && guidB != "" {
+					if (firstGuid == guidA && secondGuid == guidB) || (firstGuid == guidB && secondGuid == guidA) {
+						snapshot.Diagnostics = append(snapshot.Diagnostics, Diagnostic{Code: "prefix-overlap", Severity: "error", Message: fmt.Sprintf("%s on %s overlaps %s on %s", overlap.First.Prefix, overlap.First.AdapterName, overlap.Second.Prefix, overlap.Second.AdapterName)})
+					}
+				} else if guidA != "" || guidB != "" {
+					selected := guidA
+					if selected == "" {
+						selected = guidB
+					}
+					if firstGuid == selected || secondGuid == selected {
+						snapshot.Diagnostics = append(snapshot.Diagnostics, Diagnostic{Code: "prefix-overlap", Severity: "error", Message: fmt.Sprintf("%s on %s overlaps %s on %s", overlap.First.Prefix, overlap.First.AdapterName, overlap.Second.Prefix, overlap.Second.AdapterName)})
+					}
+				} else {
+					snapshot.Diagnostics = append(snapshot.Diagnostics, Diagnostic{Code: "prefix-overlap", Severity: "error", Message: fmt.Sprintf("%s on %s overlaps %s on %s", overlap.First.Prefix, overlap.First.AdapterName, overlap.Second.Prefix, overlap.Second.AdapterName)})
+				}
+			}
 		}
 	}
 	if state.IPv6Policy == IPv6PolicySplit {
-		for _, selection := range []ResolvedSelection{snapshot.InterfaceA, snapshot.InterfaceB} {
+		for _, selection := range checkedSelections {
 			if selection.Status != "resolved" || selection.Match == nil {
 				continue
 			}

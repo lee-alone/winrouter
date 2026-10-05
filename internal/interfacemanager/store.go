@@ -58,6 +58,17 @@ func normalizeAndValidateState(state *State) error {
 	if state.SchemaVersion != StateSchemaVersion {
 		return fmt.Errorf("unsupported interface state schema %d", state.SchemaVersion)
 	}
+	state.Mode = strings.ToLower(strings.TrimSpace(state.Mode))
+	if state.Mode == "" {
+		if state.InterfaceB.GUID != "" {
+			state.Mode = ModeDual
+		} else {
+			state.Mode = ModeSingle
+		}
+	}
+	if state.Mode != ModeSingle && state.Mode != ModeDual {
+		return fmt.Errorf("unsupported mode %q", state.Mode)
+	}
 	state.InterfaceA.GUID = strings.TrimSpace(state.InterfaceA.GUID)
 	state.InterfaceB.GUID = strings.TrimSpace(state.InterfaceB.GUID)
 	state.TUNPrefix = strings.TrimSpace(state.TUNPrefix)
@@ -106,11 +117,13 @@ func SaveState(path string, state State) error {
 	}
 	temporaryPath := temporary.Name()
 	defer os.Remove(temporaryPath)
-	if err := temporary.Chmod(0o600); err == nil {
+	if chmodErr := temporary.Chmod(0o600); chmodErr == nil {
 		_, err = temporary.Write(append(data, '\n'))
 	}
-	if closeErr := temporary.Close(); err == nil {
-		err = closeErr
+	if closeErr := temporary.Close(); closeErr != nil {
+		if err == nil {
+			err = closeErr
+		}
 	}
 	if err != nil {
 		return fmt.Errorf("write interface state: %w", err)

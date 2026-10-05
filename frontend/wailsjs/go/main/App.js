@@ -198,6 +198,10 @@ export function SelectProxyNode(arg1) {
   return window['go']['main']['App']['SelectProxyNode'](arg1);
 }
 
+export function SelectSingleInterface(arg1) {
+  return window['go']['main']['App']['SelectSingleInterface'](arg1);
+}
+
 export function SetAutostartEnabled(arg1) {
   return window['go']['main']['App']['SetAutostartEnabled'](arg1);
 }
@@ -224,6 +228,10 @@ export function SetProxyNodeEgress(arg1, arg2) {
 
 export function SetProxyNodeFavorite(arg1, arg2) {
   return window['go']['main']['App']['SetProxyNodeFavorite'](arg1, arg2);
+}
+
+export function SetRoutingMode(arg1) {
+  return window['go']['main']['App']['SetRoutingMode'](arg1);
 }
 
 export function SetRuleSettings(arg1) {

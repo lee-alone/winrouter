@@ -14,6 +14,9 @@ const (
 	legacyStateSchemaVersion  = 1
 	IPv6PolicyBlock           = "block"
 	IPv6PolicySplit           = "split"
+
+	ModeSingle = "single"
+	ModeDual   = "dual"
 )
 
 var (
@@ -23,6 +26,7 @@ var (
 
 type State struct {
 	SchemaVersion int                 `json:"schema_version"`
+	Mode          string              `json:"mode,omitempty"`
 	InterfaceA    interfaces.Identity `json:"interface_a"`
 	InterfaceB    interfaces.Identity `json:"interface_b"`
 	TUNPrefix     string              `json:"tun_prefix,omitempty"`
@@ -47,6 +51,7 @@ type ResolvedSelection struct {
 
 type Snapshot struct {
 	Sequence      uint64                `json:"sequence"`
+	Mode          string                `json:"mode"`
 	Candidates    []Candidate           `json:"candidates"`
 	Adapters      []interfaces.Adapter  `json:"adapters"`
 	Routes        []routes.Route        `json:"routes"`

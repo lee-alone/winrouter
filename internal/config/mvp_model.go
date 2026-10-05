@@ -5,11 +5,15 @@ const (
 	IPv6Block      = "block"
 	IPv6Split      = "split"
 
+	ModeSingle = "single"
+	ModeDual   = "dual"
+
 	DefaultIPv6TUNPrefix = "fdfe:dcba:9876::/126"
 )
 
 type MVPConfig struct {
 	SchemaVersion         int               `json:"schema_version"`
+	Mode                  string            `json:"mode,omitempty"`
 	TUN                   MVPTUN            `json:"tun"`
 	InterfaceA            MVPInterface      `json:"interface_a"`
 	InterfaceB            MVPInterface      `json:"interface_b"`

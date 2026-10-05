@@ -267,8 +267,14 @@ func (c *Coordinator) update(status Status) {
 }
 
 func Usable(snapshot interfacemanager.Snapshot) bool {
-	if snapshot.InterfaceA.Status != "resolved" || snapshot.InterfaceB.Status != "resolved" || snapshot.TUN == nil {
-		return false
+	if snapshot.Mode == interfacemanager.ModeSingle {
+		if snapshot.InterfaceA.Status != "resolved" || snapshot.TUN == nil {
+			return false
+		}
+	} else {
+		if snapshot.InterfaceA.Status != "resolved" || snapshot.InterfaceB.Status != "resolved" || snapshot.TUN == nil {
+			return false
+		}
 	}
 	for _, diagnostic := range snapshot.Diagnostics {
 		if diagnostic.Severity == "error" {
@@ -308,7 +314,13 @@ func physicalFingerprint(snapshot interfacemanager.Snapshot) [sha256.Size]byte {
 		sort.Strings(state.Gateways)
 		return state
 	}
-	value := [2]adapterState{stateFor(snapshot.InterfaceA), stateFor(snapshot.InterfaceB)}
-	data, _ := json.Marshal(value)
+	payload := struct {
+		Mode   string
+		States [2]adapterState
+	}{
+		Mode:   snapshot.Mode,
+		States: [2]adapterState{stateFor(snapshot.InterfaceA), stateFor(snapshot.InterfaceB)},
+	}
+	data, _ := json.Marshal(payload)
 	return sha256.Sum256(data)
 }

@@ -850,6 +850,11 @@ func (a *App) ValidateSelectedProxyConfiguration(input config.MVPConfig) error {
 }
 
 func (a *App) PreviewCoreRules(input config.MVPConfig) ([]config.RulePreview, error) {
+	if input.Mode == "" {
+		if manager, err := a.getInterfaceManager(); err == nil {
+			input.Mode = manager.Mode()
+		}
+	}
 	var err error
 	input, err = a.withRuleSettings(input)
 	if err != nil {
@@ -1120,7 +1125,7 @@ func (a *App) interfaceEgressDetails(egress string) (sourceIP string, bindInterf
 	}
 	snapshot := manager.Snapshot()
 	var iface interfacemanager.ResolvedSelection
-	if egress == nodes.EgressA {
+	if egress == nodes.EgressA || snapshot.Mode == interfacemanager.ModeSingle || snapshot.InterfaceB.Match == nil {
 		iface = snapshot.InterfaceA
 	} else {
 		iface = snapshot.InterfaceB
@@ -1149,7 +1154,7 @@ func (a *App) interfaceEgressDetailsIPv6(egress string) (sourceIP string, bindIn
 	}
 	snapshot := manager.Snapshot()
 	var iface interfacemanager.ResolvedSelection
-	if egress == nodes.EgressA {
+	if egress == nodes.EgressA || snapshot.Mode == interfacemanager.ModeSingle || snapshot.InterfaceB.Match == nil {
 		iface = snapshot.InterfaceA
 	} else {
 		iface = snapshot.InterfaceB
@@ -1320,10 +1325,51 @@ func (a *App) GetInterfaceSnapshot() (interfacemanager.Snapshot, error) {
 	return snapshot, nil
 }
 
+func (a *App) SelectSingleInterface(interfaceAGUID string) (interfacemanager.Snapshot, error) {
+	manager, err := a.getInterfaceManager()
+	if err != nil {
+		return interfacemanager.Snapshot{}, err
+	}
+	snapshot := manager.Snapshot()
+	if snapshot.Sequence == 0 {
+		snapshot, err = manager.Refresh()
+		if err != nil {
+			return interfacemanager.Snapshot{}, err
+		}
+	}
+	interfaceA, foundA := findAdapter(snapshot.Adapters, interfaceAGUID)
+	if !foundA {
+		return interfacemanager.Snapshot{}, interfaces.ErrAdapterNotFound
+	}
+	return manager.SelectSingle(interfaceA)
+}
+
+func (a *App) SetRoutingMode(mode string) (interfacemanager.Snapshot, error) {
+	status, err := a.GetCoreStatus()
+	if err != nil {
+		return interfacemanager.Snapshot{}, err
+	}
+	if status.State == core.StateRunning {
+		return interfacemanager.Snapshot{}, errors.New("stop routing before changing the routing mode")
+	}
+	manager, err := a.getInterfaceManager()
+	if err != nil {
+		return interfacemanager.Snapshot{}, err
+	}
+	snapshot, err := manager.SetMode(mode)
+	if err == nil {
+		a.observations.Log(observability.LevelInfo, "interfaces", "Routing mode updated", "", map[string]any{"mode": mode})
+	}
+	return snapshot, err
+}
+
 func (a *App) SelectInterfaces(interfaceAGUID, interfaceBGUID string) (interfacemanager.Snapshot, error) {
 	manager, err := a.getInterfaceManager()
 	if err != nil {
 		return interfacemanager.Snapshot{}, err
+	}
+	if manager.Mode() == interfacemanager.ModeSingle || strings.TrimSpace(interfaceBGUID) == "" || strings.EqualFold(strings.TrimSpace(interfaceBGUID), "none") {
+		return a.SelectSingleInterface(interfaceAGUID)
 	}
 	snapshot := manager.Snapshot()
 	if snapshot.Sequence == 0 {
@@ -1396,6 +1442,11 @@ func findAdapter(adapters []interfaces.Adapter, guid string) (interfaces.Adapter
 }
 
 func (a *App) ValidateCoreConfiguration(input config.MVPConfig) error {
+	if input.Mode == "" {
+		if manager, err := a.getInterfaceManager(); err == nil {
+			input.Mode = manager.Mode()
+		}
+	}
 	a.applyConnectionObservation(&input)
 	var err error
 	input, err = a.withRuleSettings(input)
@@ -1445,6 +1496,11 @@ func (a *App) ValidateCoreConfiguration(input config.MVPConfig) error {
 }
 
 func (a *App) ApplyCoreConfiguration(input config.MVPConfig) (core.Status, error) {
+	if input.Mode == "" {
+		if manager, err := a.getInterfaceManager(); err == nil {
+			input.Mode = manager.Mode()
+		}
+	}
 	a.applyConnectionObservation(&input)
 	var err error
 	input, err = a.withRuleSettings(input)
