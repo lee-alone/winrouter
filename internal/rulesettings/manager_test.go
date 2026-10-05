@@ -137,7 +137,7 @@ func TestDefaultsIncludePrivateLANAndRuleUpdateOutbound(t *testing.T) {
 	if len(d.Rules) == 0 || d.Rules[0].ID != "default-private-lan" {
 		t.Fatalf("defaults must include default-private-lan rule, got %#v", d.Rules)
 	}
-	if d.Rules[0].Action != "a" || len(d.Rules[0].Values) != 2 {
+	if d.Rules[0].Action != "a" || len(d.Rules[0].Values) != 7 {
 		t.Fatalf("default private lan rule action/values = %#v", d.Rules[0])
 	}
 	m, err := New(filepath.Join(t.TempDir(), "rules.json"))
@@ -167,6 +167,81 @@ func TestRuleOrderSupportsExclamationMarkSRSKeys(t *testing.T) {
 	}
 	if len(stored.RuleOrder) != 2 || stored.RuleOrder[0] != "srs:sagernet-geosite-geolocation-!cn" {
 		t.Fatalf("unexpected stored rule order: %#v", stored.RuleOrder)
+	}
+}
+
+func TestEnsureDefaultPrivateLANRuleOnStartupAndPreserveModifications(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "rules.json")
+	// 模拟旧版本用户配置，已初始化但没有 default-private-lan 规则
+	oldConfig := `{"schema_version":2,"initialized":true,"default_outbound":"b","rules":[{"id":"custom-dns","name":"Custom DNS","type":"ip","values":["1.1.1.1/32"],"action":"b","enabled":true}],"rule_order":["custom-dns"]}`
+	if err := os.WriteFile(path, []byte(oldConfig), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	m, err := New(path)
+	if err != nil {
+		t.Fatalf("New() failed: %v", err)
+	}
+	got := m.Get()
+	if len(got.RuleOrder) != 2 || got.RuleOrder[0] != DefaultPrivateLANRuleID || got.RuleOrder[1] != "custom-dns" {
+		t.Fatalf("expected DefaultPrivateLANRuleID at the front of rule order, got: %#v", got.RuleOrder)
+	}
+
+	// 验证用户可以修改内网规则配置，并且保存后重启仍然保留修改
+	var modifiedRule Rule
+	for i, r := range got.Rules {
+		if r.ID == DefaultPrivateLANRuleID {
+			got.Rules[i].Values = []string{"10.0.0.0/8"}
+			got.Rules[i].Action = "b"
+			got.Rules[i].Enabled = false
+			modifiedRule = got.Rules[i]
+			break
+		}
+	}
+	if modifiedRule.ID == "" {
+		t.Fatalf("default private lan rule not found in rules: %#v", got.Rules)
+	}
+
+	if _, err := m.Configure(got); err != nil {
+		t.Fatalf("Configure failed: %v", err)
+	}
+
+	// 重新启动加载 Manager
+	reloaded, err := New(path)
+	if err != nil {
+		t.Fatalf("reloaded New() failed: %v", err)
+	}
+	reloadedSettings := reloaded.Get()
+	var reloadedLAN Rule
+	for _, r := range reloadedSettings.Rules {
+		if r.ID == DefaultPrivateLANRuleID {
+			reloadedLAN = r
+			break
+		}
+	}
+	if len(reloadedLAN.Values) != 1 || reloadedLAN.Values[0] != "10.0.0.0/8" || reloadedLAN.Action != "b" || reloadedLAN.Enabled != false {
+		t.Fatalf("user modifications to default-private-lan were not preserved: %#v", reloadedLAN)
+	}
+	if len(reloadedSettings.RuleOrder) == 0 || reloadedSettings.RuleOrder[0] != DefaultPrivateLANRuleID {
+		t.Fatalf("rule order must still have default-private-lan at index 0, got: %#v", reloadedSettings.RuleOrder)
+	}
+}
+
+func TestEnsureDefaultPrivateLANRuleUpgradesLegacyValues(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "rules.json")
+	// 模拟已存在老版本仅有 2 个网段的配置
+	legacyConfig := `{"schema_version":2,"initialized":true,"default_outbound":"b","rules":[{"id":"default-private-lan","name":"常用内网地址 (局域网)","type":"ip","values":["192.168.0.0/16","10.110.0.0/16"],"action":"a","enabled":true}],"rule_order":["default-private-lan"]}`
+	if err := os.WriteFile(path, []byte(legacyConfig), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	m, err := New(path)
+	if err != nil {
+		t.Fatalf("New() failed: %v", err)
+	}
+	got := m.Get()
+	if len(got.Rules) != 1 || len(got.Rules[0].Values) != 7 {
+		t.Fatalf("legacy values should be automatically upgraded to 7 ranges, got: %#v", got.Rules[0].Values)
 	}
 }
 

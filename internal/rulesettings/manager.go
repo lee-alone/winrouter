@@ -15,6 +15,27 @@ import (
 
 const SchemaVersion = 2
 
+const DefaultPrivateLANRuleID = "default-private-lan"
+
+func defaultPrivateLANRule() Rule {
+	return Rule{
+		ID:   DefaultPrivateLANRuleID,
+		Name: "常用内网地址 (局域网)",
+		Type: "ip",
+		Values: []string{
+			"10.0.0.0/8",
+			"172.16.0.0/12",
+			"192.168.0.0/16",
+			"100.64.0.0/10",
+			"169.254.0.0/16",
+			"fc00::/7",
+			"fe80::/10",
+		},
+		Action:  "a",
+		Enabled: true,
+	}
+}
+
 var ruleIDPattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9:_!-]{0,127}$`)
 
 type Rule struct {
@@ -41,16 +62,9 @@ func Defaults() Settings {
 		DefaultOutbound:    "b",
 		RuleUpdateOutbound: "auto",
 		Rules: []Rule{
-			{
-				ID:      "default-private-lan",
-				Name:    "常用内网地址 (局域网)",
-				Type:    "ip",
-				Values:  []string{"192.168.0.0/16", "10.110.0.0/16"},
-				Action:  "a",
-				Enabled: true,
-			},
+			defaultPrivateLANRule(),
 		},
-		RuleOrder: []string{"default-private-lan"},
+		RuleOrder: []string{DefaultPrivateLANRuleID},
 	}
 }
 
@@ -94,10 +108,7 @@ func New(path string) (*Manager, error) {
 	if stored.RuleUpdateOutbound == "" {
 		stored.RuleUpdateOutbound = "auto"
 	}
-	if len(stored.Rules) == 0 && !stored.Initialized {
-		stored.Rules = Defaults().Rules
-		stored.RuleOrder = Defaults().RuleOrder
-	}
+	ensureDefaultPrivateLAN(&stored)
 	if err := Validate(stored); err != nil {
 		return nil, err
 	}
@@ -290,4 +301,42 @@ func clone(value Settings) Settings {
 	}
 	value.RuleOrder = append([]string{}, value.RuleOrder...)
 	return value
+}
+
+func isLegacyPrivateLANValues(values []string) bool {
+	if len(values) == 2 {
+		return (values[0] == "192.168.0.0/16" && values[1] == "10.110.0.0/16") ||
+			(values[0] == "10.110.0.0/16" && values[1] == "192.168.0.0/16")
+	}
+	return false
+}
+
+func ensureDefaultPrivateLAN(s *Settings) {
+	if len(s.Rules) == 0 && !s.Initialized {
+		s.Rules = Defaults().Rules
+		s.RuleOrder = Defaults().RuleOrder
+		return
+	}
+	hasPrivateLAN := false
+	for i, rule := range s.Rules {
+		if rule.ID == DefaultPrivateLANRuleID {
+			hasPrivateLAN = true
+			if isLegacyPrivateLANValues(rule.Values) {
+				s.Rules[i].Values = defaultPrivateLANRule().Values
+			}
+			break
+		}
+	}
+	if !hasPrivateLAN {
+		s.Rules = append(s.Rules, defaultPrivateLANRule())
+	}
+	// 确保 default-private-lan 位于 RuleOrder 最前面
+	newOrder := make([]string, 0, len(s.RuleOrder)+1)
+	newOrder = append(newOrder, DefaultPrivateLANRuleID)
+	for _, key := range s.RuleOrder {
+		if key != DefaultPrivateLANRuleID {
+			newOrder = append(newOrder, key)
+		}
+	}
+	s.RuleOrder = newOrder
 }

@@ -39,25 +39,35 @@ type Preset struct {
 }
 
 var presets = []Preset{
-	{ID: "aliyun-udp", Name: "AliDNS UDP", Scope: "domestic", Type: "udp", Server: "223.5.5.5", Port: 53},
+	// 国内主流加密 DNS（阿里 & 腾讯）
 	{ID: "aliyun-dot", Name: "AliDNS DoT", Scope: "domestic", Type: "tls", Server: "223.5.5.5", Port: 853, ServerName: "dns.alidns.com"},
+	{ID: "aliyun-doh", Name: "AliDNS DoH", Scope: "domestic", Type: "https", Server: "223.5.5.5", Port: 443, ServerName: "dns.alidns.com"},
+	{ID: "tencent-dot", Name: "DNSPod DoT", Scope: "domestic", Type: "tls", Server: "1.12.12.12", Port: 853, ServerName: "dot.pub"},
+	{ID: "tencent-doh", Name: "DNSPod DoH", Scope: "domestic", Type: "https", Server: "1.12.12.12", Port: 443, ServerName: "doh.pub"},
+	{ID: "aliyun-udp", Name: "AliDNS UDP", Scope: "domestic", Type: "udp", Server: "223.5.5.5", Port: 53},
 	{ID: "tencent-udp", Name: "DNSPod UDP", Scope: "domestic", Type: "udp", Server: "119.29.29.29", Port: 53},
-	{ID: "google-udp", Name: "Google UDP", Scope: "global", Type: "udp", Server: "8.8.8.8", Port: 53},
-	{ID: "google-doh", Name: "Google DoH", Scope: "global", Type: "https", Server: "8.8.8.8", Port: 443, ServerName: "dns.google"},
+
+	// 国际主流加密 DNS（Google & Cloudflare）
 	{ID: "cloudflare-dot", Name: "Cloudflare DoT", Scope: "global", Type: "tls", Server: "1.1.1.1", Port: 853, ServerName: "cloudflare-dns.com"},
 	{ID: "cloudflare-doh", Name: "Cloudflare DoH", Scope: "global", Type: "https", Server: "1.1.1.1", Port: 443, ServerName: "cloudflare-dns.com"},
-	{ID: "proxy-google-udp", Name: "Google UDP", Scope: "proxy", Type: "udp", Server: "8.8.8.8", Port: 53},
-	{ID: "proxy-google-doh", Name: "Google DoH", Scope: "proxy", Type: "https", Server: "8.8.8.8", Port: 443, ServerName: "dns.google"},
-	{ID: "proxy-cloudflare-dot", Name: "Cloudflare DoT", Scope: "proxy", Type: "tls", Server: "1.1.1.1", Port: 853, ServerName: "cloudflare-dns.com"},
+	{ID: "google-dot", Name: "Google DoT", Scope: "global", Type: "tls", Server: "8.8.8.8", Port: 853, ServerName: "dns.google"},
+	{ID: "google-doh", Name: "Google DoH", Scope: "global", Type: "https", Server: "8.8.8.8", Port: 443, ServerName: "dns.google"},
+	{ID: "google-udp", Name: "Google UDP", Scope: "global", Type: "udp", Server: "8.8.8.8", Port: 53},
+
+	// 代理出口预设（出口 C）
 	{ID: "proxy-cloudflare-doh", Name: "Cloudflare DoH", Scope: "proxy", Type: "https", Server: "1.1.1.1", Port: 443, ServerName: "cloudflare-dns.com"},
+	{ID: "proxy-cloudflare-dot", Name: "Cloudflare DoT", Scope: "proxy", Type: "tls", Server: "1.1.1.1", Port: 853, ServerName: "cloudflare-dns.com"},
+	{ID: "proxy-google-doh", Name: "Google DoH", Scope: "proxy", Type: "https", Server: "8.8.8.8", Port: 443, ServerName: "dns.google"},
+	{ID: "proxy-google-dot", Name: "Google DoT", Scope: "proxy", Type: "tls", Server: "8.8.8.8", Port: 853, ServerName: "dns.google"},
+	{ID: "proxy-google-udp", Name: "Google UDP", Scope: "proxy", Type: "udp", Server: "8.8.8.8", Port: 53},
 }
 
 func Defaults() Settings {
 	return Settings{
 		SchemaVersion: SchemaVersion,
-		Domestic:      Server{PresetID: "aliyun-udp", Type: "udp", Server: "223.5.5.5", Port: 53},
-		Global:        Server{PresetID: "google-udp", Type: "udp", Server: "8.8.8.8", Port: 53},
-		Proxy:         &Server{PresetID: "proxy-google-udp", Type: "udp", Server: "8.8.8.8", Port: 53},
+		Domestic:      Server{PresetID: "aliyun-dot", Type: "tls", Server: "223.5.5.5", Port: 853, ServerName: "dns.alidns.com"},
+		Global:        Server{PresetID: "tencent-dot", Type: "tls", Server: "1.12.12.12", Port: 853, ServerName: "dot.pub"},
+		Proxy:         &Server{PresetID: "proxy-cloudflare-doh", Type: "https", Server: "1.1.1.1", Port: 443, ServerName: "cloudflare-dns.com"},
 	}
 }
 

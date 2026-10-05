@@ -51,7 +51,7 @@ function normalizeDNSSettings(value: DNSSettings): DNSSettings {
     ...value,
     domestic: normalizeServer(value.domestic),
     global: normalizeServer(value.global),
-    proxy: value.proxy ? normalizeServer(value.proxy) : { preset_id: 'proxy-google-udp', type: 'udp', server: '8.8.8.8', port: 53, server_name: '' }
+    proxy: value.proxy ? normalizeServer(value.proxy) : { preset_id: 'proxy-cloudflare-doh', type: 'https', server: '1.1.1.1', port: 443, server_name: 'cloudflare-dns.com' }
   }
 }
 const emptyTrafficBudget: TrafficBudgetStatus = { enabled: false, budget_gb: 100, warning_percent: 80, period: '', used_bytes: 0, budget_bytes: 0, used_percent: 0, warning_reached: false, limit_reached: false }
@@ -68,7 +68,7 @@ const autostartEnabled = ref(false)
 const autostartBusy = ref(false)
 const budgetBusy = ref(false)
 const budgetForm = ref({ enabled: false, budget_gb: 100, warning_percent: 80 })
-const dnsSettings = ref<DNSSettings>({ schema_version: 1, domestic: { preset_id: 'aliyun-udp', type: 'udp', server: '223.5.5.5', port: 53 }, global: { preset_id: 'google-udp', type: 'udp', server: '8.8.8.8', port: 53 }, proxy: { preset_id: 'proxy-google-udp', type: 'udp', server: '8.8.8.8', port: 53 } })
+const dnsSettings = ref<DNSSettings>({ schema_version: 1, domestic: { preset_id: 'aliyun-dot', type: 'tls', server: '223.5.5.5', port: 853, server_name: 'dns.alidns.com' }, global: { preset_id: 'tencent-dot', type: 'tls', server: '1.12.12.12', port: 853, server_name: 'dot.pub' }, proxy: { preset_id: 'proxy-cloudflare-doh', type: 'https', server: '1.1.1.1', port: 443, server_name: 'cloudflare-dns.com' } })
 const dnsPresets = ref<DNSPreset[]>([])
 const dnsBusy = ref(false)
 const dnsTests = ref<Record<'domestic' | 'global' | 'proxy', DNSTestState>>({ domestic: 'idle', global: 'idle', proxy: 'idle' })
@@ -590,6 +590,7 @@ async function submitRule() {
 }
 
 async function deleteCustomRule(id: string) {
+  if (id === 'default-private-lan') return
   customRules.value = customRules.value.filter(rule => rule.id !== id)
   ruleOrder.value = ruleOrder.value.filter(key => key !== id)
   await saveRuleSettings()
@@ -1522,7 +1523,7 @@ async function copyApplicationConfigDirectory() {
 function chooseDNSPreset(scope: 'domestic' | 'global' | 'proxy') {
   const target = dnsSettings.value[scope]
   if (!target || !target.preset_id) return
-  const preset = dnsPresets.value.find(item => item.id === target.preset_id && (item.scope === scope || (scope === 'proxy' && item.scope === 'global')))
+  const preset = dnsPresets.value.find(item => item.id === target.preset_id)
   if (preset) dnsSettings.value[scope] = { preset_id: preset.id, type: preset.type, server: preset.server, port: preset.port, server_name: preset.server_name || '' }
   dnsTests.value[scope] = 'idle'
 }
@@ -1595,9 +1596,9 @@ onMounted(async () => {
     dnsSettings.value = normalizeDNSSettings(storedDNS as DNSSettings)
     dnsPresets.value = presets as DNSPreset[]
     ipv6Policy.value = storedIPv6 as 'block' | 'split'
-    customRules.value = (storedRules.initialized && Array.isArray(storedRules.rules) ? storedRules.rules : []) as CustomRule[]
-    ruleOrder.value = [...(storedRules.initialized && Array.isArray(storedRules.rule_order) ? storedRules.rule_order : [])]
-    defaultOutbound.value = (storedRules.initialized ? storedRules.default_outbound : 'b') as 'a' | 'b' | 'c'
+    customRules.value = (Array.isArray(storedRules.rules) ? storedRules.rules : []) as CustomRule[]
+    ruleOrder.value = [...(Array.isArray(storedRules.rule_order) ? storedRules.rule_order : [])]
+    defaultOutbound.value = (storedRules.default_outbound as 'a' | 'b' | 'c') || 'b'
     ruleUpdateOutbound.value = (storedRules.rule_update_outbound as 'auto' | 'a' | 'b' | 'c') || 'auto'
     proxyNodes.value = await ListProxyNodes()
     subscriptionList.value = await ListSubscriptions()
@@ -1606,6 +1607,11 @@ onMounted(async () => {
     for (const source of srsSources.value) if (!ruleOrder.value.includes(`srs:${source.id}`)) ruleOrder.value.push(`srs:${source.id}`)
     const validRuleKeys = new Set([...customRules.value.map(rule => rule.id), ...srsSources.value.map(source => `srs:${source.id}`)])
     ruleOrder.value = ruleOrder.value.filter(key => validRuleKeys.has(key))
+    if (ruleOrder.value.includes('default-private-lan')) {
+      ruleOrder.value = ['default-private-lan', ...ruleOrder.value.filter(key => key !== 'default-private-lan')]
+    } else if (customRules.value.some(rule => rule.id === 'default-private-lan')) {
+      ruleOrder.value.unshift('default-private-lan')
+    }
     await saveRuleSettings()
     addLog('info', `应用已就绪，发现 ${interfaceSnapshot.candidates.length} 块候选网卡。`)
   } catch (reason) {
@@ -1839,7 +1845,7 @@ onUnmounted(() => {
               <label class="master-rule-enabled"><input type="checkbox" :checked="row.rule.enabled" @change="toggleCustomRule(row.rule)"><span>{{ row.rule.enabled ? '启用' : '停用' }}</span></label>
               <div><strong>{{ row.rule.name }}</strong><small>{{ ruleTypeText(row.rule.type) }} · {{ row.rule.values.length }} 个值 · {{ row.rule.values.slice(0, 3).join('、') }}{{ row.rule.values.length > 3 ? '…' : '' }}</small></div>
               <span>{{ formatRuleAction(row.rule.action) }}</span>
-              <div class="proxy-actions"><button class="secondary" type="button" @click="moveMasterRule(row.key, -1)" :disabled="index === 0">上移</button><button class="secondary" type="button" @click="moveMasterRule(row.key, 1)" :disabled="index === masterRows.length - 1">下移</button><button class="secondary" type="button" @click="editCustomRule(row.rule)">编辑</button><button class="delete-button" type="button" @click="deleteCustomRule(row.rule.id)">删除</button></div>
+              <div class="proxy-actions"><button class="secondary" type="button" @click="moveMasterRule(row.key, -1)" :disabled="index === 0">上移</button><button class="secondary" type="button" @click="moveMasterRule(row.key, 1)" :disabled="index === masterRows.length - 1">下移</button><button class="secondary" type="button" @click="editCustomRule(row.rule)">编辑</button><button v-if="row.rule.id !== 'default-private-lan'" class="delete-button" type="button" @click="deleteCustomRule(row.rule.id)">删除</button></div>
             </template>
             <template v-else>
               <label class="master-rule-enabled"><input type="checkbox" :checked="row.source.enabled" :disabled="srsBusyID === row.source.id" @change="toggleSRSSource(row.source)"><span>{{ row.source.enabled ? '启用' : '停用' }}</span></label>
@@ -1870,7 +1876,7 @@ onUnmounted(() => {
             <details class="outlet-dns-settings">
               <summary class="outlet-dns-heading"><strong>出口 B DNS</strong><small>{{ dnsSettings.global.type.toUpperCase() }} · {{ dnsSettings.global.server }}:{{ dnsSettings.global.port }}</small></summary>
               <div class="dns-row">
-                <label>DNS 预设<select v-model="dnsSettings.global.preset_id" :disabled="dnsBusy" @change="dnsSettings.global.preset_id ? chooseDNSPreset('global') : setCustomDNS('global')"><option value="">自定义</option><option v-for="preset in dnsPresets.filter(item => item.scope === 'global')" :key="preset.id" :value="preset.id">{{ preset.name }}</option></select></label>
+                <label>DNS 预设<select v-model="dnsSettings.global.preset_id" :disabled="dnsBusy" @change="dnsSettings.global.preset_id ? chooseDNSPreset('global') : setCustomDNS('global')"><option value="">自定义</option><optgroup label="国内加密 DNS (推荐)"><option v-for="preset in dnsPresets.filter(item => item.scope === 'domestic')" :key="preset.id" :value="preset.id">{{ preset.name }}</option></optgroup><optgroup label="国际加密 DNS"><option v-for="preset in dnsPresets.filter(item => item.scope === 'global')" :key="preset.id" :value="preset.id">{{ preset.name }}</option></optgroup></select></label>
                 <label>协议<select v-model="dnsSettings.global.type" :disabled="dnsBusy || Boolean(dnsSettings.global.preset_id)" @change="setCustomDNS('global')"><option value="udp">UDP</option><option value="tls">DoT</option><option value="https">DoH</option></select></label>
                 <label>服务器 IP<input v-model.trim="dnsSettings.global.server" required :readonly="Boolean(dnsSettings.global.preset_id)" placeholder="1.1.1.1" @input="setCustomDNS('global')"></label>
                 <label>端口<input v-model.number="dnsSettings.global.port" type="number" min="1" max="65535" required :readonly="Boolean(dnsSettings.global.preset_id)" @input="setCustomDNS('global')"></label>
@@ -1885,7 +1891,7 @@ onUnmounted(() => {
             <details class="outlet-dns-settings">
               <summary class="outlet-dns-heading"><strong>出口 C DNS</strong><small>{{ (dnsSettings.proxy?.type ?? 'udp').toUpperCase() }} · {{ dnsSettings.proxy?.server ?? '8.8.8.8' }}:{{ dnsSettings.proxy?.port ?? 53 }}</small></summary>
               <div v-if="dnsSettings.proxy" class="dns-row">
-                <label>DNS 预设<select v-model="dnsSettings.proxy.preset_id" :disabled="dnsBusy" @change="dnsSettings.proxy.preset_id ? chooseDNSPreset('proxy') : setCustomDNS('proxy')"><option value="">自定义</option><option v-for="preset in dnsPresets.filter(item => item.scope === 'proxy' || item.scope === 'global')" :key="preset.id" :value="preset.id">{{ preset.name }}</option></select></label>
+                <label>DNS 预设<select v-model="dnsSettings.proxy.preset_id" :disabled="dnsBusy" @change="dnsSettings.proxy.preset_id ? chooseDNSPreset('proxy') : setCustomDNS('proxy')"><option value="">自定义</option><option v-for="preset in dnsPresets.filter(item => item.scope === 'proxy')" :key="preset.id" :value="preset.id">{{ preset.name }}</option></select></label>
                 <label>协议<select v-model="dnsSettings.proxy.type" :disabled="dnsBusy || Boolean(dnsSettings.proxy.preset_id)" @change="setCustomDNS('proxy')"><option value="udp">UDP</option><option value="tls">DoT</option><option value="https">DoH</option></select></label>
                 <label>服务器 IP<input v-model.trim="dnsSettings.proxy.server" required :readonly="Boolean(dnsSettings.proxy.preset_id)" placeholder="8.8.8.8" @input="setCustomDNS('proxy')"></label>
                 <label>端口<input v-model.number="dnsSettings.proxy.port" type="number" min="1" max="65535" required :readonly="Boolean(dnsSettings.proxy.preset_id)" @input="setCustomDNS('proxy')"></label>

@@ -82,3 +82,18 @@ func TestProxyDNSSettingsPersistenceAndValidation(t *testing.T) {
 		t.Fatal("expected error for invalid proxy DNS server")
 	}
 }
+
+func TestAllPresetsValid(t *testing.T) {
+	for _, preset := range Presets() {
+		server := Server{
+			PresetID:   preset.ID,
+			Type:       preset.Type,
+			Server:     preset.Server,
+			Port:       preset.Port,
+			ServerName: preset.ServerName,
+		}
+		if err := validateServer(preset.Name, server); err != nil {
+			t.Errorf("preset %q failed validation: %v", preset.ID, err)
+		}
+	}
+}

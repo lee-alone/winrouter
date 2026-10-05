@@ -59,3 +59,35 @@ func TestEndpoint(t *testing.T) {
 		t.Fatalf("endpoint = %q", got)
 	}
 }
+
+func TestLiveEncryptedDNS(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping live network test in short mode")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// AliDNS DoT
+	resAli := Test(ctx, Server{Type: "tls", Server: "223.5.5.5", Port: 853, ServerName: "dns.alidns.com"})
+	if !resAli.Success {
+		t.Logf("AliDNS DoT live probe: %v (latency %dms)", resAli.Error, resAli.DurationMS)
+	} else {
+		t.Logf("AliDNS DoT success in %dms", resAli.DurationMS)
+	}
+
+	// AliDNS DoH
+	resAliH := Test(ctx, Server{Type: "https", Server: "223.5.5.5", Port: 443, ServerName: "dns.alidns.com"})
+	if !resAliH.Success {
+		t.Logf("AliDNS DoH live probe: %v (latency %dms)", resAliH.Error, resAliH.DurationMS)
+	} else {
+		t.Logf("AliDNS DoH success in %dms", resAliH.DurationMS)
+	}
+
+	// DNSPod DoT
+	resTencent := Test(ctx, Server{Type: "tls", Server: "1.12.12.12", Port: 853, ServerName: "dot.pub"})
+	if !resTencent.Success {
+		t.Logf("DNSPod DoT live probe: %v (latency %dms)", resTencent.Error, resTencent.DurationMS)
+	} else {
+		t.Logf("DNSPod DoT success in %dms", resTencent.DurationMS)
+	}
+}
