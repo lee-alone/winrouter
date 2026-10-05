@@ -52,7 +52,3 @@ func resolveIP(ctx context.Context, hostname, dnsAddress, sourceAddress, network
 	}
 	return "", fmt.Errorf("proxy DNS returned no usable %s address", network)
 }
-
-func usableIPv6(address netip.Addr) bool {
-	return address.Is6() && !address.IsLoopback() && !address.IsUnspecified() && !address.IsLinkLocalUnicast() && !address.IsMulticast() && !address.IsPrivate()
-}
