@@ -12,6 +12,9 @@ const (
 
 	EgressA = "a"
 	EgressB = "b"
+
+	ProxyModeSingle = "single"
+	ProxyModeChain  = "chain"
 )
 
 type AuthenticationInput struct {
@@ -87,6 +90,7 @@ type Node struct {
 	HasPassword    bool               `json:"has_password"`       // Legacy compatibility
 	Username       string             `json:"username,omitempty"` // Legacy compatibility
 	Selected       bool               `json:"selected"`
+	ChainPosition  int                `json:"chain_position,omitempty"`
 	SubscriptionID string             `json:"subscription_id,omitempty"`
 	Favorite       bool               `json:"favorite"`
 }
@@ -143,5 +147,13 @@ type storedNode struct {
 type state struct {
 	SchemaVersion int          `json:"schema_version"`
 	SelectedID    string       `json:"selected_id,omitempty"`
+	Mode          string       `json:"mode,omitempty"`
+	SelectedChain []string     `json:"selected_chain,omitempty"`
 	Nodes         []storedNode `json:"nodes"`
+}
+
+type ProxySelection struct {
+	Mode          string   `json:"mode"`
+	SelectedID    string   `json:"selected_id"`
+	SelectedChain []string `json:"selected_chain"`
 }

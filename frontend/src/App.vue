@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, onUnmounted, ref, watch } from 'vue'
-import { AddProxyNode, AddSubscription, ApplyCoreConfiguration, ApplySelectedProxyConfiguration, ChangeSecurityPIN, ConfigureSRSSource, DeleteProxyNode, DeleteSRSSource, DeleteSubscription, DisableSecurityPIN, EnableSecurityPIN, ExportDiagnosticBundle, GetApplicationConfigDirectory, GetApplicationConfigInfo, GetAutostartStatus, GetConnectionObservationEnabled, GetCoreStatus, GetDNSPresets, GetDNSSettings, GetInterfaceSnapshot, GetIPv6Policy, GetObservations, GetRecoveryStatus, GetRuleSettings, GetSecurityStatus, GetSRSPresets, GetStatus, GetTrafficBudgetStatus, InspectProcessRules, ListProxyNodes, ListSRSSources, ListSubscriptions, PreviewCoreRules, PreviewDiagnosticBundle, RecordApplicationLog, RefreshSRSSource, RefreshSubscription, RepairApplicationSettings, ResetApplicationSettings, ResetInterfaceSelection, ResetTrafficBudget, ResetWindowsNetworkStack, RunHealthProbe, SelectInterfaces, SelectProxyNode, SetAutostartEnabled, SetConnectionObservationEnabled, SetDNSSettings, SetIPv6Policy, SetProxyNodeFavorite, SetRuleSettings, SetTrafficBudget, SpeedTestProxyNodes, StopCore, TestDNSServer, TestProxyNode, UnlockSecurityVault, UpdateProxyNode, UpdateSubscription, ValidateCoreConfiguration, ValidateSelectedProxyConfiguration } from '../wailsjs/go/main/App'
+import { AddProxyNode, AddSubscription, ApplyCoreConfiguration, ApplySelectedProxyConfiguration, ChangeSecurityPIN, ConfigureSRSSource, DeleteProxyNode, DeleteSRSSource, DeleteSubscription, DisableSecurityPIN, EnableSecurityPIN, ExportDiagnosticBundle, GetApplicationConfigDirectory, GetApplicationConfigInfo, GetAutostartStatus, GetConnectionObservationEnabled, GetCoreStatus, GetDNSPresets, GetDNSSettings, GetInterfaceSnapshot, GetIPv6Policy, GetObservations, GetProxySelection, GetRecoveryStatus, GetRuleSettings, GetSecurityStatus, GetSRSPresets, GetStatus, GetTrafficBudgetStatus, InspectProcessRules, ListProxyNodes, ListSRSSources, ListSubscriptions, PreviewCoreRules, PreviewDiagnosticBundle, RecordApplicationLog, RefreshSRSSource, RefreshSubscription, RepairApplicationSettings, ResetApplicationSettings, ResetInterfaceSelection, ResetTrafficBudget, ResetWindowsNetworkStack, RunHealthProbe, SelectInterfaces, SelectProxyChain, SelectProxyNode, SetAutostartEnabled, SetConnectionObservationEnabled, SetDNSSettings, SetIPv6Policy, SetProxyMode, SetProxyNodeFavorite, SetRuleSettings, SetTrafficBudget, SpeedTestProxyNodes, StopCore, TestDNSServer, TestProxyChain, TestProxyNode, UnlockSecurityVault, UpdateProxyNode, UpdateSubscription, ValidateCoreConfiguration, ValidateSelectedProxyConfiguration } from '../wailsjs/go/main/App'
 import type { config, core, interfacemanager, interfaces, main, nodes, observability, processrules, rulesettings, srssets, subscriptions } from '../wailsjs/go/models'
 import { EventsOn } from '../wailsjs/runtime/runtime'
 import type { ApplicationStatus } from './vite-env'
@@ -129,7 +129,7 @@ async function submitPinModal() {
       notice.value = '已停用 PIN 码安全保护，恢复为本地便携密钥模式'
     }
     await loadSecurityStatus()
-    proxyNodes.value = await ListProxyNodes()
+    await refreshProxyState()
     subscriptionList.value = await ListSubscriptions()
     closePinModal()
   } catch (err: any) {
@@ -202,6 +202,9 @@ const proxyTests = ref<Record<string, nodes.TestResult>>({})
 const testingProxyID = ref('')
 const testingAllProxies = ref(false)
 const proxySort = ref<'favorite' | 'latency' | 'name'>('favorite')
+const proxySelection = ref<nodes.ProxySelection>({ mode: 'single', selected_id: '', selected_chain: [] })
+const chainTestResult = ref<nodes.TestResult | null>(null)
+const testingChain = ref(false)
 const subscriptionList = ref<subscriptions.Subscription[]>([])
 const subscriptionFormOpen = ref(false)
 const subscriptionForm = ref({ id: '', name: '', url: '' })
@@ -255,6 +258,18 @@ const filteredLogs = computed(() => logFilter.value === 'all' ? logs.value : log
 const directPrefixes = computed(() => (snapshot.value?.topology.prefixes ?? []).filter(prefix => prefix.action === 'bind-interface' && (ipv6Policy.value === 'split' || !prefix.prefix.includes(':')) && !prefix.prefix.startsWith('fe80:') && (prefix.adapter_guid === selectedA.value || prefix.adapter_guid === selectedB.value)))
 const blockingDiagnostics = computed(() => (snapshot.value?.diagnostics ?? []).filter(item => item.severity === 'error'))
 const selectedProxyNode = computed(() => proxyNodes.value.find(node => node.selected))
+const isChainMode = computed(() => proxySelection.value?.mode === 'chain' && (proxyNodes.value?.length || 0) > 0)
+const chainNodes = computed(() => {
+  const list = proxyNodes.value || []
+  const map = new Map(list.map(n => [n.id, n]))
+  const chainIds = Array.isArray(proxySelection.value?.selected_chain) ? proxySelection.value.selected_chain : []
+  return chainIds.map(id => map.get(id)).filter((n): n is nodes.Node => Boolean(n))
+})
+const isChainReady = computed(() => isChainMode.value && chainNodes.value.length >= 2)
+const chainSummaryText = computed(() => {
+  if (!chainNodes.value || !chainNodes.value.length) return '未配置链路'
+  return chainNodes.value.map(n => n?.name || '未知节点').join(' ➔ ')
+})
 const sortedProxyNodes = computed(() => [...proxyNodes.value].sort((first, second) => {
   if (proxySort.value === 'favorite' && first.favorite !== second.favorite) return first.favorite ? -1 : 1
   if (proxySort.value === 'latency') {
@@ -883,7 +898,7 @@ async function saveProxyNode() {
 
     if (input.id) await UpdateProxyNode(input)
     else await AddProxyNode(input)
-    proxyNodes.value = await ListProxyNodes()
+    await refreshProxyState()
     if (input.id) {
       if (shouldClearSecret) notice.value = '代理节点已更新，已清除旧凭据。'
       else if (f.replace_secret || hasNewSecret) notice.value = '代理节点已更新，新凭据已安全保存。'
@@ -1214,13 +1229,157 @@ function formatProxySummary(node: nodes.Node): string[] {
   return parts
 }
 
+async function refreshProxyState() {
+  try {
+    const [nodesList, sel] = await Promise.all([ListProxyNodes(), GetProxySelection()])
+    const list = Array.isArray(nodesList) ? nodesList : []
+    proxyNodes.value = list
+    const selChain = Array.isArray(sel?.selected_chain) ? sel.selected_chain : []
+    const validChain = selChain.filter(id => list.some(n => n.id === id))
+    const rawMode = sel?.mode || 'single'
+    const mode = (rawMode === 'chain' && list.length > 0) ? 'chain' : 'single'
+    proxySelection.value = {
+      mode,
+      selected_id: sel?.selected_id || '',
+      selected_chain: validChain,
+    }
+  } catch (reason) {
+    console.error('Failed to refresh proxy state:', reason)
+  }
+}
+
 async function selectProxyNode(id: string) {
   if (isRunning.value) {
     error.value = '核心运行中，禁止切换代理节点；请先停止核心。'
     return
   }
-  try { await SelectProxyNode(id); proxyNodes.value = await ListProxyNodes(); notice.value = '默认代理节点已更新。' }
-  catch (reason) { error.value = `无法选择代理节点：${messageOf(reason)}` }
+  try {
+    await SelectProxyNode(id)
+    await refreshProxyState()
+    notice.value = '默认代理节点已更新。'
+  } catch (reason) {
+    error.value = `无法选择代理节点：${messageOf(reason)}`
+  }
+}
+
+async function switchProxyMode(mode: 'single' | 'chain') {
+  if (isRunning.value) {
+    error.value = '核心运行中，禁止切换代理模式；请先停止核心。'
+    return
+  }
+  if (mode === 'chain' && (!proxyNodes.value || proxyNodes.value.length === 0)) {
+    notice.value = '尚未添加代理节点，请先添加或导入节点后再启用链式套接模式。'
+    return
+  }
+  error.value = ''
+  try {
+    await SetProxyMode(mode)
+    await refreshProxyState()
+    notice.value = mode === 'chain' ? '已切换至链式套接模式。' : '已切换至单节点直连模式。'
+  } catch (reason) {
+    error.value = `切换代理模式失败：${messageOf(reason)}`
+  }
+}
+
+function isNodeInChain(id: string): boolean {
+  return Array.isArray(proxySelection.value?.selected_chain) && proxySelection.value.selected_chain.includes(id)
+}
+
+function chainNodeHopIndex(id: string): number {
+  return Array.isArray(proxySelection.value?.selected_chain) ? proxySelection.value.selected_chain.indexOf(id) : -1
+}
+
+async function addToChain(node: nodes.Node) {
+  if (isRunning.value) {
+    error.value = '核心运行中，禁止修改代理链路；请先停止核心。'
+    return
+  }
+  const curChain = Array.isArray(proxySelection.value?.selected_chain) ? proxySelection.value.selected_chain : []
+  if (curChain.includes(node.id)) return
+  const nextChain = [...curChain, node.id]
+  try {
+    await SelectProxyChain(nextChain)
+    await refreshProxyState()
+    notice.value = `已将“${node.name}”添加到代理链路末端。`
+  } catch (reason) {
+    error.value = `添加链路节点失败：${messageOf(reason)}`
+  }
+}
+
+async function removeFromChain(index: number) {
+  if (isRunning.value) {
+    error.value = '核心运行中，禁止修改代理链路；请先停止核心。'
+    return
+  }
+  const curChain = Array.isArray(proxySelection.value?.selected_chain) ? proxySelection.value.selected_chain : []
+  if (index < 0 || index >= curChain.length) return
+  const nextChain = [...curChain]
+  const removedId = nextChain.splice(index, 1)[0]
+  const nodeName = proxyNodes.value.find(n => n.id === removedId)?.name || '节点'
+  try {
+    await SelectProxyChain(nextChain)
+    await refreshProxyState()
+    notice.value = `已从链路中移除“${nodeName}”。`
+  } catch (reason) {
+    error.value = `移除链路节点失败：${messageOf(reason)}`
+  }
+}
+
+async function moveChainHop(index: number, direction: 'up' | 'down') {
+  if (isRunning.value) {
+    error.value = '核心运行中，禁止调整链路顺序；请先停止核心。'
+    return
+  }
+  const curChain = Array.isArray(proxySelection.value?.selected_chain) ? proxySelection.value.selected_chain : []
+  const targetIndex = direction === 'up' ? index - 1 : index + 1
+  if (targetIndex < 0 || targetIndex >= curChain.length || index < 0 || index >= curChain.length) return
+  const nextChain = [...curChain]
+  const [moved] = nextChain.splice(index, 1)
+  nextChain.splice(targetIndex, 0, moved)
+  try {
+    await SelectProxyChain(nextChain)
+    await refreshProxyState()
+  } catch (reason) {
+    error.value = `调整链路顺序失败：${messageOf(reason)}`
+  }
+}
+
+async function clearChain() {
+  if (isRunning.value) {
+    error.value = '核心运行中，禁止清空代理链路；请先停止核心。'
+    return
+  }
+  try {
+    await SelectProxyChain([])
+    await refreshProxyState()
+    chainTestResult.value = null
+    notice.value = '已清空代理链路。'
+  } catch (reason) {
+    error.value = `清空代理链路失败：${messageOf(reason)}`
+  }
+}
+
+async function testChain() {
+  const curChain = Array.isArray(proxySelection.value?.selected_chain) ? proxySelection.value.selected_chain : []
+  if (curChain.length < 2) {
+    error.value = '套接链至少需要 2 个节点才能进行整链测试。'
+    return
+  }
+  testingChain.value = true
+  error.value = ''
+  try {
+    const result = await TestProxyChain(curChain, getBootstrapDNSServer())
+    chainTestResult.value = result
+    if (result.available) {
+      notice.value = `整链测试成功！延迟 ${result.latency_ms} ms。`
+    } else {
+      error.value = `整链测试不可用：${formatErrorCategory(result.error_category)}${result.error ? ` (${result.error})` : ''}`
+    }
+  } catch (reason) {
+    error.value = `整链测试失败：${messageOf(reason)}`
+  } finally {
+    testingChain.value = false
+  }
 }
 
 async function deleteProxyNode(node: nodes.Node) {
@@ -1229,8 +1388,14 @@ async function deleteProxyNode(node: nodes.Node) {
     return
   }
   if (!window.confirm(`删除代理节点“${node.name}”？此操作会同时删除其加密凭据。`)) return
-  try { await DeleteProxyNode(node.id); proxyNodes.value = await ListProxyNodes(); notice.value = '代理节点及其加密凭据已删除。'; if (proxyForm.value.id === node.id) resetProxyForm() }
-  catch (reason) { error.value = `无法删除代理节点：${messageOf(reason)}` }
+  try {
+    await DeleteProxyNode(node.id)
+    await refreshProxyState()
+    notice.value = '代理节点及其加密凭据已删除。'
+    if (proxyForm.value.id === node.id) resetProxyForm()
+  } catch (reason) {
+    error.value = `无法删除代理节点：${messageOf(reason)}`
+  }
 }
 
 function getBootstrapDNSServer(): string {
@@ -1261,7 +1426,7 @@ async function speedTestAllProxies() {
 }
 
 async function toggleProxyFavorite(node: nodes.Node) {
-  try { await SetProxyNodeFavorite(node.id, !node.favorite); proxyNodes.value = await ListProxyNodes() }
+  try { await SetProxyNodeFavorite(node.id, !node.favorite); await refreshProxyState() }
   catch (reason) { error.value = `无法更新收藏：${messageOf(reason)}` }
 }
 
@@ -1277,13 +1442,13 @@ async function saveSubscription() {
 }
 async function refreshSubscription(item: subscriptions.Subscription) {
   refreshingSubscriptionID.value = item.id; error.value = ''
-  try { await RefreshSubscription(item.id); subscriptionList.value = await ListSubscriptions(); proxyNodes.value = await ListProxyNodes(); notice.value = '订阅已校验并原子更新。' }
+  try { await RefreshSubscription(item.id); subscriptionList.value = await ListSubscriptions(); await refreshProxyState(); notice.value = '订阅已校验并原子更新。' }
   catch (reason) { subscriptionList.value = await ListSubscriptions(); error.value = `订阅更新失败，已保留原节点：${messageOf(reason)}` }
   finally { refreshingSubscriptionID.value = '' }
 }
 async function deleteSubscription(item: subscriptions.Subscription) {
   if (!window.confirm(`删除订阅“${item.name}”及其节点？`)) return
-  try { await DeleteSubscription(item.id); subscriptionList.value = await ListSubscriptions(); proxyNodes.value = await ListProxyNodes(); notice.value = '订阅及其节点已删除。' }
+  try { await DeleteSubscription(item.id); subscriptionList.value = await ListSubscriptions(); await refreshProxyState(); notice.value = '订阅及其节点已删除。' }
   catch (reason) { error.value = `无法删除订阅：${messageOf(reason)}` }
 }
 
@@ -1360,6 +1525,9 @@ function formatRuleAction(action: RuleAction): string {
     case 'b':
       return `出口 B · ${selectedAdapterB.value?.friendly_name ?? '网卡 B'}`
     case 'c':
+      if (isChainMode.value && isChainReady.value) {
+        return `出口 C · 链式套接 (${chainSummaryText.value})`
+      }
       return `出口 C · 代理 (${proxyNodes.value.find(n => n.selected)?.name ?? '活动节点'})`
     case 'reject':
       return '阻断拒绝'
@@ -1600,7 +1768,7 @@ onMounted(async () => {
     ruleOrder.value = [...(Array.isArray(storedRules.rule_order) ? storedRules.rule_order : [])]
     defaultOutbound.value = (storedRules.default_outbound as 'a' | 'b' | 'c') || 'b'
     ruleUpdateOutbound.value = (storedRules.rule_update_outbound as 'auto' | 'a' | 'b' | 'c') || 'auto'
-    proxyNodes.value = await ListProxyNodes()
+    await refreshProxyState()
     subscriptionList.value = await ListSubscriptions()
     srsPresets.value = await GetSRSPresets()
     srsSources.value = await ListSRSSources()
@@ -1697,7 +1865,7 @@ onUnmounted(() => {
         </section>
         <template v-else>
           <section class="mode-row" aria-label="默认出口策略">
-            <div><p class="section-kicker">{{ t('overview.runMode') }}</p><strong>{{ defaultOutbound === 'a' ? `出口 A (${selectedAdapterA?.friendly_name ?? '网卡 A'})` : defaultOutbound === 'c' ? `出口 C (代理: ${proxyNodes.find(n => n.selected)?.name ?? '未选择'})` : `出口 B (${selectedAdapterB?.friendly_name ?? '网卡 B'})` }}</strong></div>
+            <div><p class="section-kicker">{{ t('overview.runMode') }}</p><strong>{{ defaultOutbound === 'a' ? `出口 A (${selectedAdapterA?.friendly_name ?? '网卡 A'})` : defaultOutbound === 'c' ? (isChainMode && isChainReady ? `出口 C (链式套接: ${chainSummaryText})` : `出口 C (代理: ${proxyNodes.find(n => n.selected)?.name ?? '未选择'})`) : `出口 B (${selectedAdapterB?.friendly_name ?? '网卡 B'})` }}</strong></div>
             <div class="mode-switch">
               <button type="button" :class="{ active: defaultOutbound === 'a' }" :disabled="isRunning" @click="updateDefaultOutbound('a')">默认 A</button>
               <button type="button" :class="{ active: defaultOutbound === 'b' }" :disabled="isRunning" @click="updateDefaultOutbound('b')">默认 B</button>
@@ -1714,7 +1882,11 @@ onUnmounted(() => {
               <span class="route-letter">{{ role }}</span><div><h3>{{ adapter?.friendly_name }}</h3><p>{{ t(role === 'A' ? 'overview.domestic' : 'overview.public') }}</p></div>
               <dl><div><dt>{{ t('overview.status') }}</dt><dd>{{ statusText(adapter?.status ?? '') }}</dd></div><div><dt>{{ t('overview.address') }}</dt><dd>{{ adapter?.addresses?.[0]?.ip ?? t('common.none') }}</dd></div><div><dt>{{ t('overview.gateway') }}</dt><dd>{{ adapter?.gateways?.[0] ?? t('common.none') }}</dd></div></dl>
             </article>
-            <article v-if="proxyNodes.find(n => n.selected)" class="route-row">
+            <article v-if="isChainMode && isChainReady && chainNodes[0] && chainNodes[chainNodes.length - 1]" class="route-row">
+              <span class="route-letter alternate">C</span><div><h3>{{ chainSummaryText }}</h3><p>链式套接代理出站（底层经出口 {{ chainNodes[0]?.egress?.toUpperCase() ?? 'B' }} 发起，终端落地于 {{ chainNodes[chainNodes.length - 1]?.name ?? '落地出口' }}）</p></div>
+              <dl><div><dt>模式</dt><dd>链式套接 ({{ chainNodes.length }} 跳)</dd></div><div><dt>前置跳板</dt><dd>{{ chainNodes[0]?.name ?? '跳板' }} (出口 {{ chainNodes[0]?.egress?.toUpperCase() ?? 'B' }})</dd></div><div><dt>落地出口</dt><dd>{{ chainNodes[chainNodes.length - 1]?.name ?? '落地' }}</dd></div><div><dt>整链状态</dt><dd>{{ chainTestResult?.available ? `可用 · ${chainTestResult.latency_ms}ms` : '链路就绪' }}</dd></div></dl>
+            </article>
+            <article v-else-if="proxyNodes.find(n => n.selected)" class="route-row">
               <span class="route-letter alternate">C</span><div><h3>{{ proxyNodes.find(n => n.selected)?.name }}</h3><p>代理出站（底层经出口 {{ proxyNodes.find(n => n.selected)?.egress === 'a' ? 'A' : 'B' }}）</p></div>
               <dl><div><dt>协议</dt><dd>{{ proxyNodes.find(n => n.selected)?.type.toUpperCase() }}</dd></div><div><dt>节点地址</dt><dd>{{ proxyNodes.find(n => n.selected)?.server }}:{{ proxyNodes.find(n => n.selected)?.port }}</dd></div><div><dt>状态</dt><dd>{{ proxyTests[proxyNodes.find(n => n.selected)?.id || '']?.available ? '可用' : '活动节点' }}</dd></div></dl>
             </article>
@@ -1798,14 +1970,14 @@ onUnmounted(() => {
           <select :value="defaultOutbound" :disabled="isRunning" @change="updateDefaultOutbound(($event.target as HTMLSelectElement).value as 'a' | 'b' | 'c')">
             <option value="a">出口 A · {{ selectedAdapterA?.friendly_name ?? '未选择' }}</option>
             <option value="b">出口 B · {{ selectedAdapterB?.friendly_name ?? '未选择' }}</option>
-            <option value="c">出口 C · 代理出站 ({{ proxyNodes.find(n => n.selected)?.name ?? '未配置' }})</option>
+            <option value="c">出口 C · 代理出站 ({{ isChainMode && isChainReady ? `套接: ${chainSummaryText}` : (proxyNodes.find(n => n.selected)?.name ?? '未配置') }})</option>
           </select>
         </section>
         <section class="fallback-outbound" aria-label="规则更新出口通道">
           <div><strong>规则更新出口通道</strong><small>拉取与更新 SRS 分流规则时使用的网络通道。</small></div>
           <select :value="ruleUpdateOutbound" @change="updateRuleUpdateOutbound(($event.target as HTMLSelectElement).value as 'auto' | 'a' | 'b' | 'c')">
             <option value="auto">自动选择 (代理就绪优先走代理，无代理走直连)</option>
-            <option value="c">出口 C · 代理出站 ({{ proxyNodes.find(n => n.selected)?.name ?? '未配置' }})</option>
+            <option value="c">出口 C · 代理出站 ({{ isChainMode && isChainReady ? `套接: ${chainSummaryText}` : (proxyNodes.find(n => n.selected)?.name ?? '未配置') }})</option>
             <option value="b">出口 B · {{ selectedAdapterB?.friendly_name ?? '网卡 B' }}</option>
             <option value="a">出口 A · {{ selectedAdapterA?.friendly_name ?? '网卡 A' }}</option>
           </select>
@@ -1887,7 +2059,7 @@ onUnmounted(() => {
             </details>
           </article>
           <article class="outlet-rule-group">
-            <header><span>出口 C DNS</span><h3>{{ proxyNodes.find(n => n.selected)?.name ?? '代理出站' }}</h3><small>管理该代理出口使用的域名解析服务</small></header>
+            <header><span>出口 C DNS</span><h3>{{ isChainMode && isChainReady && chainNodes.length ? `套接落地: ${chainNodes[chainNodes.length - 1]?.name || '落地节点'}` : (proxyNodes.find(n => n.selected)?.name ?? '代理出站') }}</h3><small>管理该代理出口使用的域名解析服务</small></header>
             <details class="outlet-dns-settings">
               <summary class="outlet-dns-heading"><strong>出口 C DNS</strong><small>{{ (dnsSettings.proxy?.type ?? 'udp').toUpperCase() }} · {{ dnsSettings.proxy?.server ?? '8.8.8.8' }}:{{ dnsSettings.proxy?.port ?? 53 }}</small></summary>
               <div v-if="dnsSettings.proxy" class="dns-row">
@@ -1933,6 +2105,90 @@ onUnmounted(() => {
             <button class="secondary" type="button" :disabled="testingAllProxies || !proxyNodes.length" @click="speedTestAllProxies">{{ testingAllProxies ? '测速中' : '全部测速' }}</button>
             <button class="secondary" type="button" @click="proxyImportOpen ? closeImportBox() : openImportBox()">{{ proxyImportOpen ? '取消导入' : '从链接导入' }}</button>
             <button class="primary" type="button" @click="proxyFormOpen ? resetProxyForm() : openNewProxyForm()">{{ proxyFormOpen ? '取消编辑' : '添加节点' }}</button>
+          </div>
+        </section>
+
+        <section class="proxy-mode-bar" aria-label="代理工作模式">
+          <div class="proxy-mode-info">
+            <span class="section-kicker">出口 C 代理工作模式</span>
+            <strong>{{ isChainMode ? '链式套接模式 (Hop 0 ➔ Hop 1 ➔ 终端落地)' : '单节点直连模式' }}</strong>
+            <p class="proxy-form-hint">
+              {{ isChainMode 
+                ? '多级跳板套接：前置节点通过指定物理出口（A 或 B）直连，后置节点通过前置代理隧道建立连接，最终落地于最后一跳。' 
+                : '单节点直连：直接通过指定物理网卡（A 或 B）连接选中的单一代理服务器。' }}
+            </p>
+          </div>
+          <div class="mode-switch" role="tablist" aria-label="代理工作模式选择">
+            <button type="button" :class="{ active: !isChainMode }" :disabled="isRunning" @click="switchProxyMode('single')">单节点直连</button>
+            <button type="button" :class="{ active: isChainMode }" :disabled="isRunning || !proxyNodes.length" :title="!proxyNodes.length ? '请先添加或导入代理节点后再开启链式套接' : ''" @click="switchProxyMode('chain')">链式套接模式</button>
+          </div>
+        </section>
+
+        <!-- Chain Pipeline Visualizer (Only visible in chain mode) -->
+        <section v-if="isChainMode" class="chain-pipeline-card" aria-label="代理链流水线">
+          <div class="chain-pipeline-header">
+            <div>
+              <span class="section-kicker">链路流水线设计</span>
+              <h3>套接链路流水线 ({{ chainNodes.length }} 跳)</h3>
+              <p class="proxy-form-hint">第一跳为前置中转（跳板，直连物理出口），最后一跳为落地节点（业务目标可见地址）。</p>
+            </div>
+            <div class="chain-pipeline-actions">
+              <button class="primary" type="button" :disabled="testingChain || chainNodes.length < 2" @click="testChain">
+                {{ testingChain ? '整链测试中...' : '测试整链' }}
+              </button>
+              <button class="secondary" type="button" :disabled="isRunning || !chainNodes.length" @click="clearChain">清空链路</button>
+            </div>
+          </div>
+
+          <!-- Chain Pipeline Flow -->
+          <div v-if="!chainNodes.length" class="chain-empty-state">
+            <p>尚未添加链路节点。请从下方代理节点列表中点击<strong>【+ 加入套接链】</strong>按连接顺序依次添加前置跳板与落地节点。</p>
+          </div>
+          <div v-else class="chain-pipeline-flow">
+            <template v-for="(node, idx) in chainNodes" :key="node.id">
+              <div class="chain-hop-card" :class="{ 'is-entry': idx === 0, 'is-exit': idx === chainNodes.length - 1 && chainNodes.length > 1 }">
+                <div class="chain-hop-badge">
+                  <span class="hop-index">Hop {{ idx }}</span>
+                  <span v-if="idx === 0" class="hop-role-tag entry">前置中转 (跳板)</span>
+                  <span v-else-if="idx === chainNodes.length - 1" class="hop-role-tag exit">落地出口 (终端)</span>
+                  <span v-else class="hop-role-tag middle">中继跳板</span>
+                </div>
+                <div class="chain-hop-info">
+                  <strong class="chain-hop-name" :title="node.name">{{ node.name }}</strong>
+                  <span class="chain-hop-proto">{{ node.type === 'http' ? 'HTTP CONNECT' : node.type.toUpperCase() }}</span>
+                  <span class="chain-hop-addr" :title="`${node.server}:${node.port}`">{{ node.server }}:{{ node.port }}</span>
+                  <span v-if="idx === 0" class="chain-hop-egress">底层出口 {{ node.egress.toUpperCase() }}</span>
+                  <span v-else class="chain-hop-egress chained">经 Hop {{ idx - 1 }} 隧道</span>
+                </div>
+                <div class="chain-hop-actions">
+                  <button class="hop-btn" type="button" :disabled="isRunning || idx === 0" title="前移" @click="moveChainHop(idx, 'up')">←</button>
+                  <button class="hop-btn" type="button" :disabled="isRunning || idx === chainNodes.length - 1" title="后移" @click="moveChainHop(idx, 'down')">→</button>
+                  <button class="hop-btn remove" type="button" :disabled="isRunning" title="移出链路" @click="removeFromChain(idx)">×</button>
+                </div>
+              </div>
+              <div v-if="idx < chainNodes.length - 1" class="chain-arrow-connector" aria-hidden="true">
+                <span class="chain-arrow-head">▶</span>
+              </div>
+            </template>
+          </div>
+
+          <!-- Chain Status Alert -->
+          <div v-if="chainNodes.length === 1" class="chain-alert warning">
+            <span>⚠️ 套接模式至少需要 2 个节点（1 个前置跳板 + 1 个落地节点）。请继续从下方添加落地节点。</span>
+          </div>
+          <div v-else-if="chainNodes.length >= 2 && chainNodes[0] && chainNodes[chainNodes.length - 1]" class="chain-alert info">
+            <div class="chain-alert-left">
+              <span>链路就绪：从 <strong>网卡 {{ chainNodes[0]?.egress?.toUpperCase() ?? 'B' }}</strong> 发起连接 ➔ <strong>{{ chainNodes[0]?.name }}</strong> ➔ 落地于 <strong>{{ chainNodes[chainNodes.length - 1]?.name }}</strong></span>
+            </div>
+            <div v-if="chainTestResult" class="chain-test-badge" :class="chainTestResult.available ? 'test-ok' : 'test-failed'">
+              <template v-if="chainTestResult.available">
+                整链可用 · 延迟 {{ chainTestResult.latency_ms }} ms
+                <small v-if="chainTestResult.tcp_ms"> (前置 TCP {{ chainTestResult.tcp_ms }}ms / 落地隧道 {{ chainTestResult.protocol_ms }}ms)</small>
+              </template>
+              <template v-else>
+                整链不可用 · {{ formatErrorCategory(chainTestResult.error_category) }}{{ chainTestResult.error ? ` (${chainTestResult.error})` : '' }}
+              </template>
+            </div>
           </div>
         </section>
 
@@ -2137,16 +2393,19 @@ onUnmounted(() => {
 
         <section class="proxy-list" aria-label="代理节点列表">
           <div v-if="!proxyNodes.length" class="proxy-empty">尚未添加代理节点。</div>
-          <article v-for="node in sortedProxyNodes" :key="node.id" :class="{ selected: node.selected }">
+          <article v-for="node in sortedProxyNodes" :key="node.id" :class="{ selected: isChainMode ? isNodeInChain(node.id) : node.selected }">
             <div class="proxy-status">
               <button class="favorite-button" type="button" :class="{ active: node.favorite }" :aria-label="node.favorite ? '取消收藏' : '收藏节点'" :title="node.favorite ? '取消收藏' : '收藏节点'" @click="toggleProxyFavorite(node)">{{ node.favorite ? '★' : '☆' }}</button>
-              <span :class="['selection-dot', { active: node.selected }]" aria-hidden="true"></span>
+              <span :class="['selection-dot', { active: isChainMode ? isNodeInChain(node.id) : node.selected }]" aria-hidden="true"></span>
               <div>
                 <strong>{{ node.name }}</strong>
                 <small>{{ node.type === 'http' ? 'HTTP CONNECT' : node.type.toUpperCase() }} · {{ node.server }}:{{ node.port }}<template v-if="node.resolved_ip && node.resolved_ip !== node.server"> → {{ node.resolved_ip }}</template></small>
               </div>
             </div>
             <div class="proxy-meta">
+              <span v-if="isChainMode && isNodeInChain(node.id)" class="chain-pos-badge">
+                第 {{ chainNodeHopIndex(node.id) + 1 }} 跳 {{ chainNodeHopIndex(node.id) === 0 ? '(前置跳板)' : (chainNodeHopIndex(node.id) === (proxySelection?.selected_chain?.length || 0) - 1 && (proxySelection?.selected_chain?.length || 0) > 1) ? '(落地出口)' : '' }}
+              </span>
               <span>{{ node.egress === 'a' ? '出口 A' : '出口 B' }}</span>
               <span v-for="tag in formatProxySummary(node)" :key="tag" class="proxy-meta-tag">{{ tag }}</span>
               <span :class="['credential-tag', { none: !(node.has_secret || node.has_password) }]">
@@ -2165,8 +2424,28 @@ onUnmounted(() => {
             </div>
             <div class="proxy-actions">
               <button class="secondary" type="button" :disabled="testingProxyID === node.id" @click="testProxy(node)">{{ testingProxyID === node.id ? '测试中' : '测试' }}</button>
-              <button v-if="!node.selected" class="secondary" type="button" :disabled="isRunning" :title="isRunning ? '核心运行中，禁止切换节点' : '选择此节点'" @click="selectProxyNode(node.id)">选择</button>
-              <span v-else class="selected-label">当前节点</span>
+              <template v-if="isChainMode">
+                <button
+                  v-if="!isNodeInChain(node.id)"
+                  class="primary-subtle"
+                  type="button"
+                  :disabled="isRunning"
+                  :title="isRunning ? '核心运行中，禁止修改链路' : '将此节点添加到套接链路末端'"
+                  @click="addToChain(node)"
+                >+ 加入套接链</button>
+                <button
+                  v-else
+                  class="secondary"
+                  type="button"
+                  :disabled="isRunning"
+                  :title="isRunning ? '核心运行中，禁止修改链路' : '从套接链路中移除'"
+                  @click="removeFromChain(chainNodeHopIndex(node.id))"
+                >移出链路</button>
+              </template>
+              <template v-else>
+                <button v-if="!node.selected" class="secondary" type="button" :disabled="isRunning" :title="isRunning ? '核心运行中，禁止切换节点' : '选择此节点'" @click="selectProxyNode(node.id)">选择</button>
+                <span v-else class="selected-label">当前节点</span>
+              </template>
               <button class="secondary" type="button" title="复制节点配置摘要" @click="copyProxyNodeInfo(node)">复制</button>
               <template v-if="!node.subscription_id">
                 <button class="secondary" type="button" :disabled="isRunning" :title="isRunning ? '核心运行中，禁止修改节点' : '编辑节点'" @click="editProxyNode(node)">编辑</button>

@@ -480,6 +480,168 @@ func (a *App) SelectProxyNode(id string) (nodes.Node, error) {
 	return result, nil
 }
 
+func (a *App) GetProxySelection() (nodes.ProxySelection, error) {
+	store, err := a.getNodeStore()
+	if err != nil {
+		return nodes.ProxySelection{}, err
+	}
+	return store.GetSelection(), nil
+}
+
+func (a *App) SetProxyMode(mode string) error {
+	if a.isCoreRunning() {
+		return errors.New("cannot switch proxy mode while core is running; please stop the core first")
+	}
+	store, err := a.getNodeStore()
+	if err != nil {
+		return err
+	}
+	if err := store.SetMode(mode); err != nil {
+		return err
+	}
+	a.observations.Log(observability.LevelInfo, "proxy", "Proxy mode updated", "", map[string]any{"mode": mode})
+	return nil
+}
+
+func (a *App) SelectProxyChain(ids []string) error {
+	if a.isCoreRunning() {
+		return errors.New("cannot switch proxy chain while core is running; please stop the core first")
+	}
+	store, err := a.getNodeStore()
+	if err != nil {
+		return err
+	}
+	if err := store.SelectChain(ids); err != nil {
+		return err
+	}
+	a.observations.Log(observability.LevelInfo, "proxy", "Proxy chain selected", "", map[string]any{"chain_length": len(ids)})
+	return nil
+}
+
+func (a *App) resolveNodeDomain(server string, egress string, dnsServer string) (string, error) {
+	if net.ParseIP(server) != nil {
+		return server, nil
+	}
+	dnsAddr, err := netip.ParseAddr(dnsServer)
+	dnsIs6 := err == nil && dnsAddr.Is6()
+	var dnsSource string
+	var dnsSourceErr error
+	if dnsIs6 {
+		if egress == nodes.EgressA {
+			dnsSource, dnsSourceErr = a.interfaceASourceIPv6()
+		} else {
+			dnsSource, dnsSourceErr = a.interfaceBSourceIPv6()
+		}
+	} else {
+		if egress == nodes.EgressA {
+			dnsSource, dnsSourceErr = a.interfaceASourceIPv4()
+		} else {
+			dnsSource, dnsSourceErr = a.interfaceBSourceIPv4()
+		}
+	}
+	if dnsSourceErr != nil || dnsSource == "" {
+		return "", fmt.Errorf("interface %s has no usable source address for DNS", strings.ToUpper(egress))
+	}
+	ctx, cancel := context.WithTimeout(a.ctx, 8*time.Second)
+	defer cancel()
+	resolved, resolveErr := nodes.ResolveEndpoint(ctx, server, dnsServer, dnsSource)
+	if resolveErr != nil || resolved == "" {
+		return "", fmt.Errorf("proxy DNS via interface %s: %v", strings.ToUpper(egress), resolveErr)
+	}
+	return resolved, nil
+}
+
+func (a *App) TestProxyChain(ids []string, dnsServer string) (nodes.TestResult, error) {
+	store, err := a.getNodeStore()
+	if err != nil {
+		return nodes.TestResult{}, err
+	}
+	if len(ids) == 0 {
+		return nodes.TestResult{}, errors.New("no proxy nodes in chain to test")
+	}
+	chainNodes := make([]nodes.Node, 0, len(ids))
+	chainCreds := make([]nodes.Credentials, 0, len(ids))
+	for idx, id := range ids {
+		n, c, err := store.Credentials(id)
+		if err != nil {
+			return nodes.TestResult{}, fmt.Errorf("node %d (%q): %w", idx+1, id, err)
+		}
+		chainNodes = append(chainNodes, n)
+		chainCreds = append(chainCreds, c)
+	}
+
+	hop0 := chainNodes[0]
+	egress := hop0.Egress
+	if egress == "" {
+		egress = nodes.EgressB
+	}
+	server := hop0.Server
+	if net.ParseIP(server) == nil {
+		if strings.TrimSpace(dnsServer) == "" {
+			dnsServer = "223.5.5.5"
+			if egress == nodes.EgressB {
+				dnsServer = "1.1.1.1"
+			}
+		}
+		res, err := a.resolveNodeDomain(server, egress, dnsServer)
+		if err != nil {
+			return nodes.TestResult{
+				NodeID:        hop0.ID,
+				TestedAt:      time.Now().UTC(),
+				ErrorCategory: nodes.ErrorCategoryDNSUnavailable,
+				Error:         err.Error(),
+			}, nil
+		}
+		server = res
+		chainNodes[0].ResolvedIP = res
+	}
+
+	source, bindInterface, ifaceErr := a.interfaceEgressDetails(egress)
+	if ifaceErr != nil {
+		return nodes.TestResult{
+			NodeID:        hop0.ID,
+			TestedAt:      time.Now().UTC(),
+			ErrorCategory: nodes.ErrorCategoryEgressDown,
+			Error:         ifaceErr.Error(),
+		}, nil
+	}
+	if parsedServer := net.ParseIP(server); parsedServer != nil && parsedServer.To4() == nil {
+		if v6Source, _, v6Err := a.interfaceEgressDetailsIPv6(egress); v6Err == nil && v6Source != "" {
+			source = v6Source
+		}
+	}
+	corePath, coreErr := locateBundledCore()
+	if coreErr != nil || corePath == "" {
+		return nodes.TestResult{
+			NodeID:        chainNodes[len(chainNodes)-1].ID,
+			TestedAt:      time.Now().UTC(),
+			ErrorCategory: nodes.ErrorCategoryCoreFailed,
+			Error:         "sing-box core binary is required for proxy chain testing",
+		}, nil
+	}
+
+	probeCtx, probeCancel := context.WithTimeout(a.ctx, 12*time.Second)
+	defer probeCancel()
+
+	result := nodes.ProbeChainWithOptions(probeCtx, chainNodes, chainCreds, nodes.ProbeOptions{
+		CorePath:      corePath,
+		BindInterface: bindInterface,
+		SourceIP:      source,
+	})
+
+	level := observability.LevelInfo
+	if !result.Available {
+		level = observability.LevelWarning
+	}
+	a.observations.Log(level, "proxy", "Proxy chain availability tested", "", map[string]any{
+		"chain_length": len(ids),
+		"available":    result.Available,
+		"latency_ms":   result.LatencyMS,
+		"status":       result.Status,
+	})
+	return result, nil
+}
+
 func (a *App) SetProxyNodeFavorite(id string, favorite bool) (nodes.Node, error) {
 	store, err := a.getNodeStore()
 	if err != nil {
@@ -690,6 +852,103 @@ func (a *App) ApplySelectedProxyConfiguration(input config.MVPConfig) (core.Stat
 	return a.ApplyCoreConfiguration(input)
 }
 
+func buildMVPProxyFromNode(node nodes.Node, credentials nodes.Credentials, server string) *config.MVPProxy {
+	egress := node.Egress
+	if egress == "" {
+		egress = nodes.EgressB
+	}
+	if server == "" {
+		server = node.Server
+	}
+	var proxyTLS *config.MVPProxyTLS
+	if node.TLS != nil && node.TLS.Enabled {
+		proxyTLS = &config.MVPProxyTLS{
+			Enabled:    true,
+			ServerName: node.TLS.ServerName,
+			Insecure:   node.TLS.Insecure,
+			ALPN:       append([]string(nil), node.TLS.ALPN...),
+		}
+	}
+	var proxyTransport *config.MVPProxyTransport
+	if node.Transport != nil && node.Transport.Type != "" {
+		proxyTransport = &config.MVPProxyTransport{
+			Type: node.Transport.Type,
+			Path: node.Transport.Path,
+			Host: node.Transport.Host,
+		}
+	}
+	p := &config.MVPProxy{
+		Type:      node.Type,
+		Server:    server,
+		Port:      node.Port,
+		Egress:    egress,
+		Password:  credentials.Password,
+		UUID:      credentials.UUID,
+		Flow:      credentials.Flow,
+		TLS:       proxyTLS,
+		Transport: proxyTransport,
+	}
+	if node.Type == nodes.TypeShadowsocks {
+		method := credentials.Method
+		if method == "" {
+			method = credentials.Username
+		}
+		p.Method = method
+	} else {
+		p.Username = credentials.Username
+	}
+	return p
+}
+
+func (a *App) resolveProxyServer(server string, egress string, dnsConfig config.MVPDNS) (resolved string, actual string, err error) {
+	if net.ParseIP(server) != nil {
+		return "", server, nil
+	}
+	dnsServer := dnsConfig.Global
+	if egress == nodes.EgressA {
+		dnsServer = dnsConfig.Domestic
+	}
+	var res string
+	var resolveErr error
+	if dnsServer.Type == "udp" && dnsServer.Port == 53 {
+		dnsAddr, err := netip.ParseAddr(dnsServer.Server)
+		if err == nil {
+			var source string
+			if dnsAddr.Is6() {
+				if egress == nodes.EgressA {
+					source, _ = a.interfaceASourceIPv6()
+				} else {
+					source, _ = a.interfaceBSourceIPv6()
+				}
+			} else {
+				if egress == nodes.EgressA {
+					source, _ = a.interfaceASourceIPv4()
+				} else {
+					source, _ = a.interfaceBSourceIPv4()
+				}
+			}
+			dnsCtx, dnsCancel := context.WithTimeout(a.ctx, 8*time.Second)
+			res, resolveErr = nodes.ResolveEndpoint(dnsCtx, server, dnsServer.Server, source)
+			dnsCancel()
+		}
+	}
+	if res == "" {
+		sysCtx, sysCancel := context.WithTimeout(a.ctx, 8*time.Second)
+		ips, sysErr := net.DefaultResolver.LookupIP(sysCtx, "ip", server)
+		sysCancel()
+		if sysErr == nil && len(ips) > 0 {
+			res = ips[0].String()
+			resolveErr = nil
+		}
+	}
+	if res == "" && resolveErr != nil {
+		return "", "", fmt.Errorf("proxy DNS via interface %s: %w", strings.ToUpper(egress), resolveErr)
+	} else if res == "" {
+		return "", "", fmt.Errorf("failed to resolve proxy domain %q", server)
+	}
+	return res, res, nil
+}
+
 func (a *App) withSelectedProxy(input config.MVPConfig) (config.MVPConfig, error) {
 	store, err := a.getNodeStore()
 	if err != nil {
@@ -698,6 +957,70 @@ func (a *App) withSelectedProxy(input config.MVPConfig) (config.MVPConfig, error
 		}
 		return input, nil
 	}
+	selection := store.GetSelection()
+	if selection.Mode == nodes.ProxyModeChain && len(selection.SelectedChain) >= 2 {
+		chainNodes, chainCreds, err := store.SelectedChainCredentials()
+		if err != nil {
+			if requiresProxy(input) {
+				return config.MVPConfig{}, err
+			}
+			return input, nil
+		}
+
+		hop0 := chainNodes[0]
+		egress0 := hop0.Egress
+		if egress0 == "" {
+			egress0 = nodes.EgressB
+		}
+		resolved0, server0, err := a.resolveProxyServer(hop0.Server, egress0, input.DNS)
+		if err != nil {
+			return config.MVPConfig{}, err
+		}
+		if resolved0 != "" {
+			if _, commitErr := store.CommitResolvedIP(hop0.ID, resolved0); commitErr != nil {
+				return config.MVPConfig{}, commitErr
+			}
+			chainNodes[0].ResolvedIP = resolved0
+		} else {
+			chainNodes[0].ResolvedIP = server0
+		}
+
+		source, bindInterface, ifaceErr := a.interfaceEgressDetails(egress0)
+		if ifaceErr != nil {
+			return config.MVPConfig{}, ifaceErr
+		}
+		if parsedServer := net.ParseIP(server0); parsedServer != nil && parsedServer.To4() == nil {
+			if v6Source, _, v6Err := a.interfaceEgressDetailsIPv6(egress0); v6Err == nil && v6Source != "" {
+				source = v6Source
+			}
+		}
+
+		corePath, coreErr := locateBundledCore()
+		if coreErr == nil && corePath != "" {
+			probeCtx, probeCancel := context.WithTimeout(a.ctx, 8*time.Second)
+			probe := nodes.ProbeChainWithOptions(probeCtx, chainNodes, chainCreds, nodes.ProbeOptions{
+				CorePath:      corePath,
+				BindInterface: bindInterface,
+				SourceIP:      source,
+			})
+			probeCancel()
+			if !probe.Available {
+				a.observations.Log(observability.LevelWarning, "proxy", "Selected proxy chain failed health check, proceeding with warning", "", map[string]any{"error": probe.Error, "category": probe.ErrorCategory, "hop0_server": server0})
+			}
+		}
+
+		input.ProxyChain = make([]config.MVPProxy, len(chainNodes))
+		for i := range chainNodes {
+			srv := chainNodes[i].Server
+			if i == 0 {
+				srv = server0
+			}
+			input.ProxyChain[i] = *buildMVPProxyFromNode(chainNodes[i], chainCreds[i], srv)
+		}
+		input.Proxy = &input.ProxyChain[len(input.ProxyChain)-1]
+		return input, nil
+	}
+
 	node, credentials, err := store.SelectedCredentials()
 	if err != nil {
 		if requiresProxy(input) {
@@ -709,57 +1032,11 @@ func (a *App) withSelectedProxy(input config.MVPConfig) (config.MVPConfig, error
 	if egress == "" {
 		egress = nodes.EgressB
 	}
-	server := node.Server
-	var resolved string
-	if net.ParseIP(server) == nil {
-		dnsServer := input.DNS.Global
-		if egress == nodes.EgressA {
-			dnsServer = input.DNS.Domestic
-		}
-		var res string
-		var resolveErr error
-		if dnsServer.Type == "udp" && dnsServer.Port == 53 {
-			dnsAddr, err := netip.ParseAddr(dnsServer.Server)
-			if err == nil {
-				var source string
-				if dnsAddr.Is6() {
-					if egress == nodes.EgressA {
-						source, _ = a.interfaceASourceIPv6()
-					} else {
-						source, _ = a.interfaceBSourceIPv6()
-					}
-				} else {
-					if egress == nodes.EgressA {
-						source, _ = a.interfaceASourceIPv4()
-					} else {
-						source, _ = a.interfaceBSourceIPv4()
-					}
-				}
-				dnsCtx, dnsCancel := context.WithTimeout(a.ctx, 8*time.Second)
-				res, resolveErr = nodes.ResolveEndpoint(dnsCtx, node.Server, dnsServer.Server, source)
-				dnsCancel()
-			}
-		}
-		// If custom UDP 53 resolution failed or DNS type was DoH/DoT, fallback to system resolver
-		if res == "" {
-			sysCtx, sysCancel := context.WithTimeout(a.ctx, 8*time.Second)
-			ips, sysErr := net.DefaultResolver.LookupIP(sysCtx, "ip", node.Server)
-			sysCancel()
-			if sysErr == nil && len(ips) > 0 {
-				res = ips[0].String()
-				resolveErr = nil
-			}
-		}
-		if res == "" && resolveErr != nil {
-			return config.MVPConfig{}, fmt.Errorf("proxy DNS via interface %s: %w", strings.ToUpper(egress), resolveErr)
-		} else if res == "" {
-			return config.MVPConfig{}, fmt.Errorf("failed to resolve proxy domain %q", node.Server)
-		}
-		resolved = res
-		server = resolved
+	resolved, server, err := a.resolveProxyServer(node.Server, egress, input.DNS)
+	if err != nil {
+		return config.MVPConfig{}, err
 	}
 
-	// For ALL proxy nodes (both raw IP and resolved domain), perform full protocol-level health check before startup
 	source, bindInterface, ifaceErr := a.interfaceEgressDetails(egress)
 	if ifaceErr != nil {
 		return config.MVPConfig{}, ifaceErr
@@ -794,43 +1071,8 @@ func (a *App) withSelectedProxy(input config.MVPConfig) (config.MVPConfig, error
 		}
 	}
 
-	var proxyTLS *config.MVPProxyTLS
-	if node.TLS != nil && node.TLS.Enabled {
-		proxyTLS = &config.MVPProxyTLS{
-			Enabled:    true,
-			ServerName: node.TLS.ServerName,
-			Insecure:   node.TLS.Insecure,
-			ALPN:       append([]string(nil), node.TLS.ALPN...),
-		}
-	}
-	var proxyTransport *config.MVPProxyTransport
-	if node.Transport != nil && node.Transport.Type != "" {
-		proxyTransport = &config.MVPProxyTransport{
-			Type: node.Transport.Type,
-			Path: node.Transport.Path,
-			Host: node.Transport.Host,
-		}
-	}
-	input.Proxy = &config.MVPProxy{
-		Type:      node.Type,
-		Server:    server,
-		Port:      node.Port,
-		Egress:    egress,
-		Password:  credentials.Password,
-		UUID:      credentials.UUID,
-		Flow:      credentials.Flow,
-		TLS:       proxyTLS,
-		Transport: proxyTransport,
-	}
-	if node.Type == nodes.TypeShadowsocks {
-		method := credentials.Method
-		if method == "" {
-			method = credentials.Username
-		}
-		input.Proxy.Method = method
-	} else {
-		input.Proxy.Username = credentials.Username
-	}
+	input.Proxy = buildMVPProxyFromNode(node, credentials, server)
+	input.ProxyChain = []config.MVPProxy{*input.Proxy}
 	return input, nil
 }
 

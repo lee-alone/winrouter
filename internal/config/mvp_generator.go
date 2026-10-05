@@ -49,42 +49,19 @@ func ValidateMVPModel(input MVPConfig) error {
 			requiresProxy = true
 		}
 	}
-	if requiresProxy && input.Proxy == nil {
+	hasProxy := input.Proxy != nil || len(input.ProxyChain) > 0
+	if requiresProxy && !hasProxy {
 		return fmt.Errorf("proxy configuration is required when default_outbound or a rule targets proxy (c)")
 	}
-	if input.Proxy != nil {
-		switch input.Proxy.Type {
-		case "http", "shadowsocks", "vmess", "vless", "trojan":
-		default:
-			return fmt.Errorf("unsupported proxy type %q", input.Proxy.Type)
+	if len(input.ProxyChain) > 0 {
+		for i, p := range input.ProxyChain {
+			if err := validateProxyItem(p, i == 0); err != nil {
+				return fmt.Errorf("proxy chain hop %d: %w", i+1, err)
+			}
 		}
-		if input.Proxy.Egress != "" && input.Proxy.Egress != "a" && input.Proxy.Egress != "b" {
-			return fmt.Errorf("unsupported proxy egress %q", input.Proxy.Egress)
-		}
-		address, err := netip.ParseAddr(input.Proxy.Server)
-		if err != nil || (!address.Is4() && !address.Is6()) || address.IsUnspecified() || address.IsLoopback() || address.IsLinkLocalUnicast() || address.IsMulticast() || address.IsPrivate() {
-			return fmt.Errorf("proxy server must be a usable fixed IP address")
-		}
-		if input.Proxy.Port == 0 {
-			return fmt.Errorf("proxy port is required")
-		}
-		if input.Proxy.Type == "http" && input.Proxy.Password != "" && strings.TrimSpace(input.Proxy.Username) == "" {
-			return fmt.Errorf("proxy username is required when password is set")
-		}
-		if input.Proxy.Type == "shadowsocks" && (strings.TrimSpace(input.Proxy.Method) == "" || input.Proxy.Password == "") {
-			return fmt.Errorf("Shadowsocks method and password are required")
-		}
-		if input.Proxy.Type == "vmess" && strings.TrimSpace(input.Proxy.UUID) == "" {
-			return fmt.Errorf("VMess UUID is required")
-		}
-		if input.Proxy.Type == "vless" && strings.TrimSpace(input.Proxy.UUID) == "" {
-			return fmt.Errorf("VLESS UUID is required")
-		}
-		if input.Proxy.Type == "trojan" && strings.TrimSpace(input.Proxy.Password) == "" {
-			return fmt.Errorf("Trojan password is required")
-		}
-		if input.Proxy.Transport != nil && input.Proxy.Transport.Type != "tcp" && input.Proxy.Transport.Type != "ws" {
-			return fmt.Errorf("unsupported proxy transport %q", input.Proxy.Transport.Type)
+	} else if input.Proxy != nil {
+		if err := validateProxyItem(*input.Proxy, true); err != nil {
+			return err
 		}
 	}
 	if strings.TrimSpace(input.InterfaceA.GUID) == "" || strings.TrimSpace(input.InterfaceB.GUID) == "" {
@@ -234,63 +211,34 @@ func GenerateMVP(input MVPConfig) (Generated, error) {
 	} else if input.DefaultOutbound == "c" {
 		finalOutbound = "proxy"
 	}
-	if input.Proxy != nil {
-		proxyBind := input.InterfaceB.BindInterface
-		if input.Proxy.Egress == "a" {
-			proxyBind = input.InterfaceA.BindInterface
+	var proxyChain []MVPProxy
+	if len(input.ProxyChain) > 0 {
+		proxyChain = input.ProxyChain
+	} else if input.Proxy != nil {
+		proxyChain = []MVPProxy{*input.Proxy}
+	}
+
+	if len(proxyChain) > 0 {
+		entryBind := input.InterfaceB.BindInterface
+		if proxyChain[0].Egress == "a" {
+			entryBind = input.InterfaceA.BindInterface
 		}
-		proxyOutbound := Outbound{
-			Type:          input.Proxy.Type,
-			Tag:           "proxy",
-			Server:        input.Proxy.Server,
-			ServerPort:    input.Proxy.Port,
-			BindInterface: proxyBind,
-			Method:        input.Proxy.Method,
-			Username:      input.Proxy.Username,
-			Password:      input.Proxy.Password,
-			UUID:          input.Proxy.UUID,
-			Flow:          input.Proxy.Flow,
-			Security:      input.Proxy.Security,
-		}
-		if input.Proxy.TLS != nil && input.Proxy.TLS.Enabled {
-			sni := input.Proxy.TLS.ServerName
-			if sni == "" && input.Proxy.Server != "" && net.ParseIP(input.Proxy.Server) == nil {
-				sni = input.Proxy.Server
-			}
-			var cleanALPN []string
-			for _, a := range input.Proxy.TLS.ALPN {
-				trimmed := strings.TrimSpace(a)
-				if trimmed != "" && !strings.EqualFold(trimmed, "default") {
-					cleanALPN = append(cleanALPN, trimmed)
+		if len(proxyChain) == 1 {
+			outbounds = append(outbounds, buildOutboundFromProxy(proxyChain[0], "proxy", entryBind, ""))
+		} else {
+			for i, p := range proxyChain {
+				if i == 0 {
+					outbounds = append(outbounds, buildOutboundFromProxy(p, "proxy-hop-0", entryBind, ""))
+				} else if i == len(proxyChain)-1 {
+					prevTag := fmt.Sprintf("proxy-hop-%d", i-1)
+					outbounds = append(outbounds, buildOutboundFromProxy(p, "proxy", "", prevTag))
+				} else {
+					tag := fmt.Sprintf("proxy-hop-%d", i)
+					prevTag := fmt.Sprintf("proxy-hop-%d", i-1)
+					outbounds = append(outbounds, buildOutboundFromProxy(p, tag, "", prevTag))
 				}
 			}
-			proxyOutbound.TLS = &TLSConfig{
-				Enabled:    true,
-				ServerName: sni,
-				Insecure:   input.Proxy.TLS.Insecure,
-				ALPN:       cleanALPN,
-			}
 		}
-		if input.Proxy.Type == "trojan" && proxyOutbound.TLS == nil {
-			proxyOutbound.TLS = &TLSConfig{
-				Enabled:    true,
-				ServerName: input.Proxy.Server,
-			}
-		}
-		if input.Proxy.Transport != nil {
-			var headers map[string][]string
-			if input.Proxy.Transport.Host != "" {
-				headers = map[string][]string{
-					"Host": {input.Proxy.Transport.Host},
-				}
-			}
-			proxyOutbound.Transport = &TransportConfig{
-				Type:    input.Proxy.Transport.Type,
-				Path:    input.Proxy.Transport.Path,
-				Headers: headers,
-			}
-		}
-		outbounds = append(outbounds, proxyOutbound)
 	}
 	bindings := make(map[string]string)
 	policyPrefixes := make([]policy.DirectPrefix, 0, len(directPrefixes))
@@ -313,13 +261,14 @@ func GenerateMVP(input MVPConfig) (Generated, error) {
 	}
 	infrastructureA := []string(nil)
 	infrastructureB := []string(nil)
-	if input.Proxy != nil {
-		proxyAddress := netip.MustParseAddr(input.Proxy.Server)
-		proxyPrefix := netip.PrefixFrom(proxyAddress, proxyAddress.BitLen()).String()
-		if input.Proxy.Egress == "a" {
-			infrastructureA = []string{proxyPrefix}
-		} else {
-			infrastructureB = []string{proxyPrefix}
+	if len(proxyChain) > 0 {
+		if proxyAddress, err := netip.ParseAddr(proxyChain[0].Server); err == nil {
+			proxyPrefix := netip.PrefixFrom(proxyAddress, proxyAddress.BitLen()).String()
+			if proxyChain[0].Egress == "a" {
+				infrastructureA = []string{proxyPrefix}
+			} else {
+				infrastructureB = []string{proxyPrefix}
+			}
 		}
 	}
 	customRules := make([]policy.CustomRule, 0, len(input.CustomRules))
@@ -433,7 +382,7 @@ func GenerateMVP(input MVPConfig) (Generated, error) {
 		dnsServer("dns-domestic", input.DNS.Domestic, "domestic-direct"),
 		dnsServer("dns-global", input.DNS.Global, "foreign-direct"),
 	}
-	if input.Proxy != nil {
+	if len(proxyChain) > 0 {
 		proxyDNS := input.DNS.Global
 		if input.DNS.Proxy != nil && input.DNS.Proxy.Server != "" {
 			proxyDNS = *input.DNS.Proxy
@@ -540,9 +489,9 @@ func GenerateMVP(input MVPConfig) (Generated, error) {
 		return Generated{}, fmt.Errorf("marshal MVP configuration: %w", err)
 	}
 	proxyBindInterface := ""
-	if input.Proxy != nil {
+	if len(proxyChain) > 0 {
 		proxyBindInterface = input.InterfaceB.BindInterface
-		if input.Proxy.Egress == "a" {
+		if proxyChain[0].Egress == "a" {
 			proxyBindInterface = input.InterfaceA.BindInterface
 		}
 	}
@@ -636,4 +585,103 @@ func finalDNSResolver(defaultOutbound string) string {
 		return "dns-proxy"
 	}
 	return "dns-global"
+}
+
+func validateProxyItem(p MVPProxy, isEntryNode bool) error {
+	switch p.Type {
+	case "http", "shadowsocks", "vmess", "vless", "trojan":
+	default:
+		return fmt.Errorf("unsupported proxy type %q", p.Type)
+	}
+	if p.Egress != "" && p.Egress != "a" && p.Egress != "b" {
+		return fmt.Errorf("unsupported proxy egress %q", p.Egress)
+	}
+	if isEntryNode {
+		address, err := netip.ParseAddr(p.Server)
+		if err != nil || (!address.Is4() && !address.Is6()) || address.IsUnspecified() || address.IsLoopback() || address.IsLinkLocalUnicast() || address.IsMulticast() || address.IsPrivate() {
+			return fmt.Errorf("proxy server must be a usable fixed IP address")
+		}
+	} else {
+		if strings.TrimSpace(p.Server) == "" {
+			return fmt.Errorf("proxy server is required")
+		}
+	}
+	if p.Port == 0 {
+		return fmt.Errorf("proxy port is required")
+	}
+	if p.Type == "http" && p.Password != "" && strings.TrimSpace(p.Username) == "" {
+		return fmt.Errorf("proxy username is required when password is set")
+	}
+	if p.Type == "shadowsocks" && (strings.TrimSpace(p.Method) == "" || p.Password == "") {
+		return fmt.Errorf("Shadowsocks method and password are required")
+	}
+	if p.Type == "vmess" && strings.TrimSpace(p.UUID) == "" {
+		return fmt.Errorf("VMess UUID is required")
+	}
+	if p.Type == "vless" && strings.TrimSpace(p.UUID) == "" {
+		return fmt.Errorf("VLESS UUID is required")
+	}
+	if p.Type == "trojan" && strings.TrimSpace(p.Password) == "" {
+		return fmt.Errorf("Trojan password is required")
+	}
+	if p.Transport != nil && p.Transport.Type != "tcp" && p.Transport.Type != "ws" {
+		return fmt.Errorf("unsupported proxy transport %q", p.Transport.Type)
+	}
+	return nil
+}
+
+func buildOutboundFromProxy(p MVPProxy, tag, bindInterface, detour string) Outbound {
+	out := Outbound{
+		Type:          p.Type,
+		Tag:           tag,
+		Server:        p.Server,
+		ServerPort:    p.Port,
+		BindInterface: bindInterface,
+		Detour:        detour,
+		Method:        p.Method,
+		Username:      p.Username,
+		Password:      p.Password,
+		UUID:          p.UUID,
+		Flow:          p.Flow,
+		Security:      p.Security,
+	}
+	if p.TLS != nil && p.TLS.Enabled {
+		sni := p.TLS.ServerName
+		if sni == "" && p.Server != "" && net.ParseIP(p.Server) == nil {
+			sni = p.Server
+		}
+		var cleanALPN []string
+		for _, a := range p.TLS.ALPN {
+			trimmed := strings.TrimSpace(a)
+			if trimmed != "" && !strings.EqualFold(trimmed, "default") {
+				cleanALPN = append(cleanALPN, trimmed)
+			}
+		}
+		out.TLS = &TLSConfig{
+			Enabled:    true,
+			ServerName: sni,
+			Insecure:   p.TLS.Insecure,
+			ALPN:       cleanALPN,
+		}
+	}
+	if p.Type == "trojan" && out.TLS == nil {
+		out.TLS = &TLSConfig{
+			Enabled:    true,
+			ServerName: p.Server,
+		}
+	}
+	if p.Transport != nil {
+		var headers map[string][]string
+		if p.Transport.Host != "" {
+			headers = map[string][]string{
+				"Host": {p.Transport.Host},
+			}
+		}
+		out.Transport = &TransportConfig{
+			Type:    p.Transport.Type,
+			Path:    p.Transport.Path,
+			Headers: headers,
+		}
+	}
+	return out
 }

@@ -63,6 +63,8 @@ export function GetInterfaceSnapshot():Promise<interfacemanager.Snapshot>;
 
 export function GetObservations():Promise<main.ObservationSnapshot>;
 
+export function GetProxySelection():Promise<nodes.ProxySelection>;
+
 export function GetRecoveryStatus():Promise<recovery.Status>;
 
 export function GetRuleSettings():Promise<rulesettings.Settings>;
@@ -109,6 +111,8 @@ export function SaveProxyNode(arg1:nodes.Input):Promise<nodes.Node>;
 
 export function SelectInterfaces(arg1:string,arg2:string):Promise<interfacemanager.Snapshot>;
 
+export function SelectProxyChain(arg1:Array<string>):Promise<void>;
+
 export function SelectProxyNode(arg1:string):Promise<nodes.Node>;
 
 export function SetAutostartEnabled(arg1:boolean):Promise<autostart.Status>;
@@ -118,6 +122,8 @@ export function SetConnectionObservationEnabled(arg1:boolean):Promise<void>;
 export function SetDNSSettings(arg1:dnssettings.Settings):Promise<dnssettings.Settings>;
 
 export function SetIPv6Policy(arg1:string):Promise<interfacemanager.Snapshot>;
+
+export function SetProxyMode(arg1:string):Promise<void>;
 
 export function SetProxyNodeFavorite(arg1:string,arg2:boolean):Promise<nodes.Node>;
 
@@ -136,6 +142,8 @@ export function Startup(arg1:context.Context):Promise<void>;
 export function StopCore():Promise<core.Status>;
 
 export function TestDNSServer(arg1:dnssettings.Server):Promise<dnssettings.TestResult>;
+
+export function TestProxyChain(arg1:Array<string>,arg2:string):Promise<nodes.TestResult>;
 
 export function TestProxyNode(arg1:string,arg2:string):Promise<nodes.TestResult>;
 

@@ -98,6 +98,7 @@ type Outbound struct {
 	Type           string           `json:"type"`
 	Tag            string           `json:"tag"`
 	BindInterface  string           `json:"bind_interface,omitempty"`
+	Detour         string           `json:"detour,omitempty"`
 	Server         string           `json:"server,omitempty"`
 	ServerPort     uint16           `json:"server_port,omitempty"`
 	DomainResolver string           `json:"domain_resolver,omitempty"`

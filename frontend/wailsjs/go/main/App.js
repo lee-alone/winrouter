@@ -94,6 +94,10 @@ export function GetObservations() {
   return window['go']['main']['App']['GetObservations']();
 }
 
+export function GetProxySelection() {
+  return window['go']['main']['App']['GetProxySelection']();
+}
+
 export function GetRecoveryStatus() {
   return window['go']['main']['App']['GetRecoveryStatus']();
 }
@@ -186,6 +190,10 @@ export function SelectInterfaces(arg1, arg2) {
   return window['go']['main']['App']['SelectInterfaces'](arg1, arg2);
 }
 
+export function SelectProxyChain(arg1) {
+  return window['go']['main']['App']['SelectProxyChain'](arg1);
+}
+
 export function SelectProxyNode(arg1) {
   return window['go']['main']['App']['SelectProxyNode'](arg1);
 }
@@ -204,6 +212,10 @@ export function SetDNSSettings(arg1) {
 
 export function SetIPv6Policy(arg1) {
   return window['go']['main']['App']['SetIPv6Policy'](arg1);
+}
+
+export function SetProxyMode(arg1) {
+  return window['go']['main']['App']['SetProxyMode'](arg1);
 }
 
 export function SetProxyNodeFavorite(arg1, arg2) {
@@ -240,6 +252,10 @@ export function StopCore() {
 
 export function TestDNSServer(arg1) {
   return window['go']['main']['App']['TestDNSServer'](arg1);
+}
+
+export function TestProxyChain(arg1, arg2) {
+  return window['go']['main']['App']['TestProxyChain'](arg1, arg2);
 }
 
 export function TestProxyNode(arg1, arg2) {

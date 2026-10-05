@@ -853,3 +853,143 @@ func fixtureInput(t *testing.T) MVPConfig {
 	}
 	return input
 }
+
+func TestGenerateMVPProxyChain(t *testing.T) {
+	// 1. Two-hop chain: Hop 0 (Shadowsocks, Egress B) -> Hop 1 (VMess, Exit)
+	input2 := fixtureInput(t)
+	input2.DefaultOutbound = "c"
+	input2.Proxy = nil
+	input2.ProxyChain = []MVPProxy{
+		{
+			Type:     "shadowsocks",
+			Server:   "198.51.100.11",
+			Port:     8388,
+			Egress:   "b",
+			Method:   "aes-128-gcm",
+			Password: "pass-hop-0",
+		},
+		{
+			Type:     "vmess",
+			Server:   "198.51.100.22",
+			Port:     443,
+			UUID:     "a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d",
+			Security: "auto",
+		},
+	}
+	gen2, err := GenerateMVP(input2)
+	if err != nil {
+		t.Fatalf("GenerateMVP 2-hop failed: %v", err)
+	}
+
+	outbounds2 := make(map[string]Outbound)
+	for _, o := range gen2.Model.Outbounds {
+		outbounds2[o.Tag] = o
+	}
+
+	hop0, ok0 := outbounds2["proxy-hop-0"]
+	if !ok0 {
+		t.Fatal("missing proxy-hop-0 outbound")
+	}
+	if hop0.Type != "shadowsocks" || hop0.BindInterface != input2.InterfaceB.BindInterface || hop0.Detour != "" {
+		t.Fatalf("unexpected proxy-hop-0: %#v", hop0)
+	}
+
+	exit, okExit := outbounds2["proxy"]
+	if !okExit {
+		t.Fatal("missing proxy terminal outbound")
+	}
+	if exit.Type != "vmess" || exit.BindInterface != "" || exit.Detour != "proxy-hop-0" {
+		t.Fatalf("unexpected terminal proxy: %#v", exit)
+	}
+
+	// Verify loop-prevention route: only hop 0 server IP (198.51.100.11/32) should be in foreign-direct rules
+	var hop0Protected, hop1Protected bool
+	for _, r := range gen2.Model.Route.Rules {
+		if r.Outbound == "foreign-direct" {
+			for _, cidr := range r.IPCIDR {
+				if cidr == "198.51.100.11/32" {
+					hop0Protected = true
+				}
+				if cidr == "198.51.100.22/32" {
+					hop1Protected = true
+				}
+			}
+		}
+	}
+	if !hop0Protected {
+		t.Error("hop 0 IP must be protected with foreign-direct rule")
+	}
+	if hop1Protected {
+		t.Error("hop 1 IP must NOT be in foreign-direct rules")
+	}
+
+	// 2. Three-hop chain: Hop 0 (Trojan, Egress A) -> Hop 1 (Shadowsocks) -> Hop 2 (VLESS, Exit)
+	input3 := fixtureInput(t)
+	input3.DefaultOutbound = "c"
+	input3.Proxy = nil
+	input3.ProxyChain = []MVPProxy{
+		{
+			Type:     "trojan",
+			Server:   "198.51.100.11",
+			Port:     443,
+			Egress:   "a",
+			Password: "pass-trojan",
+			TLS:      &MVPProxyTLS{Enabled: true, ServerName: "trojan.test"},
+		},
+		{
+			Type:     "shadowsocks",
+			Server:   "198.51.100.22",
+			Port:     8388,
+			Method:   "aes-128-gcm",
+			Password: "pass-ss",
+		},
+		{
+			Type:   "vless",
+			Server: "198.51.100.33",
+			Port:   443,
+			UUID:   "b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e",
+			Flow:   "xtls-rprx-vision",
+			TLS:    &MVPProxyTLS{Enabled: true, ServerName: "vless.test"},
+		},
+	}
+	gen3, err := GenerateMVP(input3)
+	if err != nil {
+		t.Fatalf("GenerateMVP 3-hop failed: %v", err)
+	}
+
+	outbounds3 := make(map[string]Outbound)
+	for _, o := range gen3.Model.Outbounds {
+		outbounds3[o.Tag] = o
+	}
+
+	h0, ok0_3 := outbounds3["proxy-hop-0"]
+	if !ok0_3 || h0.Type != "trojan" || h0.BindInterface != input3.InterfaceA.BindInterface || h0.Detour != "" {
+		t.Fatalf("unexpected 3-hop proxy-hop-0: %#v", h0)
+	}
+
+	h1, ok1_3 := outbounds3["proxy-hop-1"]
+	if !ok1_3 || h1.Type != "shadowsocks" || h1.BindInterface != "" || h1.Detour != "proxy-hop-0" {
+		t.Fatalf("unexpected 3-hop proxy-hop-1: %#v", h1)
+	}
+
+	h2, ok2_3 := outbounds3["proxy"]
+	if !ok2_3 || h2.Type != "vless" || h2.BindInterface != "" || h2.Detour != "proxy-hop-1" {
+		t.Fatalf("unexpected 3-hop terminal proxy: %#v", h2)
+	}
+
+	// Verify loop-prevention route: only hop 0 server IP (198.51.100.11/32) should be in domestic-direct rules
+	var hop0Protected3 bool
+	for _, r := range gen3.Model.Route.Rules {
+		if r.Outbound == "domestic-direct" {
+			for _, cidr := range r.IPCIDR {
+				if cidr == "198.51.100.11/32" {
+					hop0Protected3 = true
+				}
+			}
+		}
+	}
+	if !hop0Protected3 {
+		t.Error("3-hop hop 0 IP must be protected with domestic-direct rule")
+	}
+}
+

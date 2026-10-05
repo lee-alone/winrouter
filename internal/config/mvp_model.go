@@ -21,6 +21,7 @@ type MVPConfig struct {
 	Domestic              MVPDomestic       `json:"domestic"`
 	DNS                   MVPDNS            `json:"dns"`
 	Proxy                 *MVPProxy         `json:"proxy,omitempty"`
+	ProxyChain            []MVPProxy        `json:"proxy_chain,omitempty"`
 	IPv6                  string            `json:"ipv6"`
 	ConnectionObservation bool              `json:"connection_observation,omitempty"`
 	ConnectionAPISecret   string            `json:"connection_api_secret,omitempty"`

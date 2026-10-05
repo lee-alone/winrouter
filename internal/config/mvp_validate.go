@@ -72,6 +72,13 @@ func ValidateMVPSemantics(generated Generated) error {
 		}
 		tags[outbound.Tag] = struct{}{}
 	}
+	for _, outbound := range model.Outbounds {
+		if outbound.Detour != "" {
+			if _, ok := tags[outbound.Detour]; !ok {
+				return semanticError("outbound %q references missing detour %q", outbound.Tag, outbound.Detour)
+			}
+		}
+	}
 	if _, ok := tags[model.Route.Final]; !ok {
 		return semanticError("route.final references missing outbound %q", model.Route.Final)
 	}
@@ -82,7 +89,11 @@ func ValidateMVPSemantics(generated Generated) error {
 		}
 	}
 	if proxy != nil {
-		if proxy.BindInterface != generated.ProxyBindInterface || proxy.Server == "" || proxy.ServerPort == 0 {
+		expectedBind := generated.ProxyBindInterface
+		if proxy.Detour != "" {
+			expectedBind = ""
+		}
+		if proxy.BindInterface != expectedBind || proxy.Server == "" || proxy.ServerPort == 0 {
 			return semanticError("proxy outbound must be complete and correctly bound")
 		}
 		switch proxy.Type {
@@ -110,16 +121,26 @@ func ValidateMVPSemantics(generated Generated) error {
 			return semanticError("unsupported proxy outbound type %q", proxy.Type)
 		}
 
+		entryOutbound := proxy
+		if proxy.Detour != "" {
+			for i := range model.Outbounds {
+				if model.Outbounds[i].Tag == "proxy-hop-0" {
+					entryOutbound = &model.Outbounds[i]
+					break
+				}
+			}
+		}
+
 		expectedDirectOutbound := "foreign-direct"
 		for _, direct := range model.Outbounds {
-			if direct.Tag == "domestic-direct" && strings.EqualFold(direct.BindInterface, proxy.BindInterface) {
+			if direct.Tag == "domestic-direct" && strings.EqualFold(direct.BindInterface, entryOutbound.BindInterface) {
 				expectedDirectOutbound = "domestic-direct"
 			}
 		}
 
-		proxyAddr, err := netip.ParseAddr(proxy.Server)
+		proxyAddr, err := netip.ParseAddr(entryOutbound.Server)
 		if err != nil {
-			return semanticError("invalid proxy server address %q", proxy.Server)
+			return semanticError("invalid proxy server address %q", entryOutbound.Server)
 		}
 		endpoint := netip.PrefixFrom(proxyAddr, proxyAddr.BitLen()).String()
 		protected := false

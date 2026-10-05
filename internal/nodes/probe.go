@@ -105,6 +105,73 @@ func ProbeWithOptions(ctx context.Context, node Node, credentials Credentials, o
 	return result
 }
 
+func ProbeChainWithOptions(ctx context.Context, chainNodes []Node, credentials []Credentials, opts ProbeOptions) TestResult {
+	started := time.Now().UTC()
+	if len(chainNodes) == 0 {
+		return TestResult{
+			TestedAt:      started,
+			ErrorCategory: ErrorCategoryCoreFailed,
+			Error:         "no proxy nodes in chain to probe",
+		}
+	}
+	if len(chainNodes) == 1 {
+		return ProbeWithOptions(ctx, chainNodes[0], credentials[0], opts)
+	}
+
+	result := TestResult{
+		NodeID:   chainNodes[len(chainNodes)-1].ID,
+		TestedAt: started,
+	}
+
+	targetURL := opts.TestTarget
+	if targetURL == "" {
+		targetURL = DefaultTestTarget
+	}
+
+	hop0 := chainNodes[0]
+	server0 := hop0.ResolvedIP
+	if server0 == "" {
+		server0 = hop0.Server
+	}
+	tcpStart := time.Now()
+	dialer := dialerForEndpoint(server0, opts.SourceIP)
+	tcpConn, tcpErr := dialer.DialContext(ctx, "tcp", net.JoinHostPort(server0, fmt.Sprint(hop0.Port)))
+	result.TCPMS = time.Since(tcpStart).Milliseconds()
+	if tcpErr != nil {
+		result.TCPReachable = false
+		result.ErrorCategory = ErrorCategoryTCPFailed
+		if ctx.Err() == context.DeadlineExceeded {
+			result.ErrorCategory = ErrorCategoryTimeout
+		}
+		result.Error = fmt.Sprintf("hop 0 TCP connect failed: %v", tcpErr)
+		result.TotalMS = result.TCPMS
+		result.LatencyMS = result.TCPMS
+		return result
+	}
+	_ = tcpConn.Close()
+	result.TCPReachable = true
+
+	if opts.CorePath == "" {
+		result.ProtocolAvailable = false
+		result.Available = false
+		result.ErrorCategory = ErrorCategoryCoreFailed
+		result.Error = "sing-box core binary is required for chain probe but not found"
+		result.TotalMS = result.TCPMS
+		result.LatencyMS = result.TCPMS
+		return result
+	}
+
+	protoStart := time.Now()
+	probeChainWithEphemeralCore(ctx, chainNodes, credentials, opts.CorePath, opts.BindInterface, targetURL, &result)
+	result.ProtocolMS = time.Since(protoStart).Milliseconds()
+	result.TotalMS = time.Since(started).Milliseconds()
+	result.LatencyMS = result.ProtocolMS
+	if result.LatencyMS <= 0 {
+		result.LatencyMS = result.TotalMS
+	}
+	return result
+}
+
 func probeHTTPProtocol(ctx context.Context, node Node, credentials Credentials, server, sourceIP string, result *TestResult) {
 	dialer := dialerForEndpoint(server, sourceIP)
 	conn, err := dialer.DialContext(ctx, "tcp", net.JoinHostPort(server, fmt.Sprint(node.Port)))
@@ -196,26 +263,22 @@ type ephemeralRouteConfig struct {
 	Final string `json:"final"`
 }
 
-func probeWithEphemeralCore(ctx context.Context, node Node, credentials Credentials, server, corePath, bindInterface, targetURL string, result *TestResult) {
-	// Pick an ephemeral local port
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		result.ErrorCategory = ErrorCategoryCoreFailed
-		result.Error = fmt.Sprintf("failed to allocate local test port: %v", err)
-		return
+func buildEphemeralOutbound(node Node, credentials Credentials, tag, bindInterface, detour string) map[string]any {
+	server := node.ResolvedIP
+	if server == "" {
+		server = node.Server
 	}
-	localPort := uint16(listener.Addr().(*net.TCPAddr).Port)
-	_ = listener.Close()
-
-	// Build ephemeral sing-box outbound config with optional bind_interface
 	proxyOutbound := map[string]any{
 		"type":        node.Type,
-		"tag":         "proxy",
+		"tag":         tag,
 		"server":      server,
 		"server_port": node.Port,
 	}
 	if bindInterface != "" {
 		proxyOutbound["bind_interface"] = bindInterface
+	}
+	if detour != "" {
+		proxyOutbound["detour"] = detour
 	}
 
 	switch node.Type {
@@ -284,17 +347,64 @@ func probeWithEphemeralCore(ctx context.Context, node Node, credentials Credenti
 		}
 		proxyOutbound["transport"] = transportConfig
 	}
+	return proxyOutbound
+}
 
+func probeWithEphemeralCore(ctx context.Context, node Node, credentials Credentials, server, corePath, bindInterface, targetURL string, result *TestResult) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		result.ErrorCategory = ErrorCategoryCoreFailed
+		result.Error = fmt.Sprintf("failed to allocate local test port: %v", err)
+		return
+	}
+	localPort := uint16(listener.Addr().(*net.TCPAddr).Port)
+	_ = listener.Close()
+
+	if server != "" {
+		node.ResolvedIP = server
+	}
+	proxyOutbound := buildEphemeralOutbound(node, credentials, "proxy", bindInterface, "")
+	runEphemeralSingBox(ctx, localPort, []map[string]any{proxyOutbound, {"type": "direct", "tag": "direct"}}, corePath, targetURL, result)
+}
+
+func probeChainWithEphemeralCore(ctx context.Context, chainNodes []Node, credentials []Credentials, corePath, bindInterface, targetURL string, result *TestResult) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		result.ErrorCategory = ErrorCategoryCoreFailed
+		result.Error = fmt.Sprintf("failed to allocate local test port: %v", err)
+		return
+	}
+	localPort := uint16(listener.Addr().(*net.TCPAddr).Port)
+	_ = listener.Close()
+
+	outbounds := make([]map[string]any, 0, len(chainNodes)+1)
+	for i, node := range chainNodes {
+		var tag, bind, detour string
+		if i == 0 {
+			tag = "proxy-hop-0"
+			bind = bindInterface
+		} else if i == len(chainNodes)-1 {
+			tag = "proxy"
+			detour = fmt.Sprintf("proxy-hop-%d", i-1)
+		} else {
+			tag = fmt.Sprintf("proxy-hop-%d", i)
+			detour = fmt.Sprintf("proxy-hop-%d", i-1)
+		}
+		outbounds = append(outbounds, buildEphemeralOutbound(node, credentials[i], tag, bind, detour))
+	}
+	outbounds = append(outbounds, map[string]any{"type": "direct", "tag": "direct"})
+
+	runEphemeralSingBox(ctx, localPort, outbounds, corePath, targetURL, result)
+}
+
+func runEphemeralSingBox(ctx context.Context, localPort uint16, outbounds []map[string]any, corePath, targetURL string, result *TestResult) {
 	config := ephemeralSingBoxConfig{
 		Log: ephemeralLogConfig{Level: "panic"},
 		Inbounds: []ephemeralMixedInbound{
 			{Type: "mixed", Tag: "mixed-in", Listen: "127.0.0.1", ListenPort: localPort},
 		},
-		Outbounds: []map[string]any{
-			proxyOutbound,
-			{"type": "direct", "tag": "direct"},
-		},
-		Route: ephemeralRouteConfig{Final: "proxy"},
+		Outbounds: outbounds,
+		Route:     ephemeralRouteConfig{Final: "proxy"},
 	}
 
 	configData, err := json.Marshal(config)

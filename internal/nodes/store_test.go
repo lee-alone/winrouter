@@ -2,8 +2,10 @@ package nodes
 
 import (
 	"bytes"
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -366,3 +368,168 @@ func TestStoreRejectsULAAndPrivateNodeServer(t *testing.T) {
 		}
 	}
 }
+
+func TestStoreProxyChainSelectionAndMode(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "nodes.json")
+	store, err := New(path, testProtector{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	n1, err := store.Add(Input{
+		Name:           "Hop1",
+		Type:           TypeShadowsocks,
+		Server:         "198.51.100.10",
+		Port:           8388,
+		Authentication: AuthenticationInput{Method: "aes-128-gcm", Password: "secret-1"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	n2, err := store.Add(Input{
+		Name:           "Hop2",
+		Type:           TypeVMess,
+		Server:         "198.51.100.20",
+		Port:           443,
+		Authentication: AuthenticationInput{UUID: "a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Initial selection default to single
+	sel := store.GetSelection()
+	if sel.Mode != ProxyModeSingle || sel.SelectedID != n1.ID {
+		t.Fatalf("unexpected initial selection: %#v", sel)
+	}
+
+	// Select chain
+	if err := store.SelectChain([]string{n1.ID, n2.ID}); err != nil {
+		t.Fatalf("SelectChain failed: %v", err)
+	}
+
+	sel2 := store.GetSelection()
+	if sel2.Mode != ProxyModeChain || len(sel2.SelectedChain) != 2 || sel2.SelectedChain[0] != n1.ID || sel2.SelectedChain[1] != n2.ID {
+		t.Fatalf("unexpected chain selection: %#v", sel2)
+	}
+
+	// Verify List() reflects chain positions
+	list := store.List()
+	if len(list) != 2 {
+		t.Fatalf("expected 2 nodes, got %d", len(list))
+	}
+	var node1, node2 Node
+	for _, n := range list {
+		if n.ID == n1.ID {
+			node1 = n
+		}
+		if n.ID == n2.ID {
+			node2 = n
+		}
+	}
+	if node1.ChainPosition != 1 || !node1.Selected {
+		t.Errorf("node 1 chain pos = %d, selected = %v, want pos=1, selected=true", node1.ChainPosition, node1.Selected)
+	}
+	if node2.ChainPosition != 2 || !node2.Selected {
+		t.Errorf("node 2 chain pos = %d, selected = %v, want pos=2, selected=true", node2.ChainPosition, node2.Selected)
+	}
+
+	// Verify SelectedChainCredentials()
+	chainNodes, chainCreds, err := store.SelectedChainCredentials()
+	if err != nil {
+		t.Fatalf("SelectedChainCredentials failed: %v", err)
+	}
+	if len(chainNodes) != 2 || len(chainCreds) != 2 {
+		t.Fatalf("expected 2 items, got nodes=%d creds=%d", len(chainNodes), len(chainCreds))
+	}
+	if chainCreds[0].Password != "secret-1" || chainCreds[1].UUID != "a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d" {
+		t.Errorf("credentials mismatch: %#v, %#v", chainCreds[0], chainCreds[1])
+	}
+
+	// Test deleting n1 removes it from chain
+	if err := store.Delete(n1.ID); err != nil {
+		t.Fatalf("Delete failed: %v", err)
+	}
+	sel3 := store.GetSelection()
+	if len(sel3.SelectedChain) != 1 || sel3.SelectedChain[0] != n2.ID {
+		t.Errorf("expected chain after delete to contain only n2, got %#v", sel3.SelectedChain)
+	}
+
+	// Test Select single node switches mode back to single
+	if _, err := store.Select(n2.ID); err != nil {
+		t.Fatalf("Select single failed: %v", err)
+	}
+	sel4 := store.GetSelection()
+	if sel4.Mode != ProxyModeSingle || sel4.SelectedID != n2.ID {
+		t.Errorf("expected single mode with n2 selected, got %#v", sel4)
+	}
+}
+
+func TestStoreChainModeEmptyDefensive(t *testing.T) {
+	tempPath := filepath.Join(t.TempDir(), "empty_nodes.json")
+	store, err := New(tempPath, testProtector{})
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
+
+	// 1. SetMode chain on empty store must fail
+	if err := store.SetMode(ProxyModeChain); err == nil {
+		t.Fatal("expected error when setting chain mode on empty store, got nil")
+	}
+
+	// 2. GetSelection must return single mode and non-nil empty slice for chain
+	sel := store.GetSelection()
+	if sel.Mode != ProxyModeSingle {
+		t.Errorf("expected mode single, got %s", sel.Mode)
+	}
+	if sel.SelectedChain == nil || len(sel.SelectedChain) != 0 {
+		t.Errorf("expected non-nil empty slice for SelectedChain, got %#v", sel.SelectedChain)
+	}
+
+	// 3. JSON serialization of ProxySelection must serialize SelectedChain as [] not null
+	data, err := json.Marshal(sel)
+	if err != nil {
+		t.Fatalf("marshal selection failed: %v", err)
+	}
+	if !strings.Contains(string(data), `"selected_chain":[]`) {
+		t.Errorf("expected JSON to contain '\"selected_chain\":[]', got %s", string(data))
+	}
+
+	// 4. File on disk with mode: chain and nodes: [] should auto-heal to single mode on load
+	chainOnDiskPath := filepath.Join(t.TempDir(), "chain_disk.json")
+	if err := os.WriteFile(chainOnDiskPath, []byte(`{"schema_version":3,"mode":"chain","selected_chain":[],"nodes":[]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	loadedStore, err := New(chainOnDiskPath, testProtector{})
+	if err != nil {
+		t.Fatalf("loading store with chain mode on 0 nodes failed: %v", err)
+	}
+	loadedSel := loadedStore.GetSelection()
+	if loadedSel.Mode != ProxyModeSingle {
+		t.Errorf("expected auto-healed mode single, got %s", loadedSel.Mode)
+	}
+
+	// 5. Deleting all nodes from an active chain auto-resets mode to single
+	n, err := loadedStore.Add(Input{Name: "Node1", Type: TypeHTTP, Server: "203.0.113.1", Port: 8080})
+	if err != nil {
+		t.Fatalf("add node failed: %v", err)
+	}
+	if err := loadedStore.SetMode(ProxyModeChain); err != nil {
+		t.Fatalf("SetMode chain failed with 1 node: %v", err)
+	}
+	if err := loadedStore.SelectChain([]string{n.ID}); err != nil {
+		t.Fatalf("SelectChain failed: %v", err)
+	}
+	if err := loadedStore.Delete(n.ID); err != nil {
+		t.Fatalf("Delete failed: %v", err)
+	}
+	afterDeleteSel := loadedStore.GetSelection()
+	if afterDeleteSel.Mode != ProxyModeSingle {
+		t.Errorf("expected mode single after deleting last node, got %s", afterDeleteSel.Mode)
+	}
+	if afterDeleteSel.SelectedChain == nil || len(afterDeleteSel.SelectedChain) != 0 {
+		t.Errorf("expected empty SelectedChain after deleting last node, got %#v", afterDeleteSel.SelectedChain)
+	}
+}
+

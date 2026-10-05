@@ -322,6 +322,7 @@ export namespace config {
 	    domestic: MVPDomestic;
 	    dns: MVPDNS;
 	    proxy?: MVPProxy;
+	    proxy_chain?: MVPProxy[];
 	    ipv6: string;
 	    connection_observation?: boolean;
 	    connection_api_secret?: string;
@@ -344,6 +345,7 @@ export namespace config {
 	        this.domestic = this.convertValues(source["domestic"], MVPDomestic);
 	        this.dns = this.convertValues(source["dns"], MVPDNS);
 	        this.proxy = this.convertValues(source["proxy"], MVPProxy);
+	        this.proxy_chain = this.convertValues(source["proxy_chain"], MVPProxy);
 	        this.ipv6 = source["ipv6"];
 	        this.connection_observation = source["connection_observation"];
 	        this.connection_api_secret = source["connection_api_secret"];
@@ -1220,6 +1222,7 @@ export namespace nodes {
 	    has_password: boolean;
 	    username?: string;
 	    selected: boolean;
+	    chain_position?: number;
 	    subscription_id?: string;
 	    favorite: boolean;
 	
@@ -1243,6 +1246,7 @@ export namespace nodes {
 	        this.has_password = source["has_password"];
 	        this.username = source["username"];
 	        this.selected = source["selected"];
+	        this.chain_position = source["chain_position"];
 	        this.subscription_id = source["subscription_id"];
 	        this.favorite = source["favorite"];
 	    }
@@ -1264,6 +1268,22 @@ export namespace nodes {
 		    }
 		    return a;
 		}
+	}
+	export class ProxySelection {
+	    mode: string;
+	    selected_id: string;
+	    selected_chain: string[];
+	
+	    static createFrom(source: any = {}) {
+	        return new ProxySelection(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.mode = source["mode"];
+	        this.selected_id = source["selected_id"];
+	        this.selected_chain = source["selected_chain"];
+	    }
 	}
 	export class SecurityStatus {
 	    pin_enabled: boolean;
