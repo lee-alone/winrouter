@@ -126,14 +126,16 @@ func (s *Store) save(next state) error {
 	}
 	temporaryPath := temporary.Name()
 	defer os.Remove(temporaryPath)
-	if err := temporary.Chmod(0o600); err == nil {
-		_, err = temporary.Write(append(data, '\n'))
+	if err := temporary.Chmod(0o600); err != nil {
+		_ = temporary.Close()
+		return fmt.Errorf("set node state temporary file permissions: %w", err)
 	}
-	if closeErr := temporary.Close(); err == nil {
-		err = closeErr
-	}
-	if err != nil {
+	if _, err := temporary.Write(append(data, '\n')); err != nil {
+		_ = temporary.Close()
 		return fmt.Errorf("write node state: %w", err)
+	}
+	if err := temporary.Close(); err != nil {
+		return fmt.Errorf("close node state temporary file: %w", err)
 	}
 	if err := replaceFile(temporaryPath, s.path); err != nil {
 		return fmt.Errorf("replace node state: %w", err)

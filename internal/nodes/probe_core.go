@@ -275,13 +275,14 @@ func runEphemeralSingBox(ctx context.Context, localPort uint16, outbounds []map[
 	defer resp.Body.Close()
 
 	result.Status = resp.StatusCode
-	if resp.StatusCode == http.StatusNoContent || resp.StatusCode == http.StatusOK {
+	switch resp.StatusCode {
+	case http.StatusNoContent, http.StatusOK:
 		result.ProtocolAvailable = true
 		result.Available = true
-	} else if resp.StatusCode == http.StatusProxyAuthRequired {
+	case http.StatusProxyAuthRequired:
 		result.ErrorCategory = ErrorCategoryAuthFailed
 		result.Error = "proxy authentication failed"
-	} else {
+	default:
 		result.ErrorCategory = ErrorCategoryProtocolFailed
 		result.Error = fmt.Sprintf("unexpected response status: %d", resp.StatusCode)
 	}
