@@ -125,6 +125,8 @@ export function SetIPv6Policy(arg1:string):Promise<interfacemanager.Snapshot>;
 
 export function SetProxyMode(arg1:string):Promise<void>;
 
+export function SetProxyNodeEgress(arg1:string,arg2:string):Promise<nodes.Node>;
+
 export function SetProxyNodeFavorite(arg1:string,arg2:boolean):Promise<nodes.Node>;
 
 export function SetRuleSettings(arg1:rulesettings.Settings):Promise<rulesettings.Settings>;

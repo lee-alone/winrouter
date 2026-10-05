@@ -70,13 +70,23 @@ func (m *Manager) List() []Subscription {
 	return result
 }
 
+func (m *Manager) Get(id string) (Subscription, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	index := find(m.state.Subscriptions, id)
+	if index < 0 {
+		return Subscription{}, fmt.Errorf("subscription %q not found", id)
+	}
+	return public(m.state.Subscriptions[index]), nil
+}
+
 func (m *Manager) Add(input Input) (Subscription, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if input.ID != "" {
 		return Subscription{}, errors.New("new subscription must not specify an id")
 	}
-	item, err := m.makeStored(input, "")
+	item, err := m.makeStored(input, storedSubscription{})
 	if err != nil {
 		return Subscription{}, err
 	}
@@ -100,7 +110,11 @@ func (m *Manager) UpdateDefinition(input Input) (Subscription, error) {
 	if index < 0 {
 		return Subscription{}, fmt.Errorf("subscription %q not found", input.ID)
 	}
-	item, err := m.makeStored(input, m.state.Subscriptions[index].ProtectedURL)
+	oldEgress := m.state.Subscriptions[index].Egress
+	if oldEgress == "" {
+		oldEgress = nodes.EgressB
+	}
+	item, err := m.makeStored(input, m.state.Subscriptions[index])
 	if err != nil {
 		return Subscription{}, err
 	}
@@ -113,6 +127,9 @@ func (m *Manager) UpdateDefinition(input Input) (Subscription, error) {
 		return Subscription{}, err
 	}
 	m.state = next
+	if item.Egress != oldEgress && m.nodes != nil {
+		_ = m.nodes.UpdateSubscriptionDefaultEgress(item.ID, item.Egress)
+	}
 	return public(item), nil
 }
 
@@ -168,6 +185,13 @@ func (m *Manager) Refresh(ctx context.Context, id string) (Subscription, error) 
 	if err != nil {
 		return Subscription{}, m.recordFailure(index, "subscription document validation failed: "+err.Error())
 	}
+	subEgress := m.state.Subscriptions[index].Egress
+	if subEgress == "" {
+		subEgress = nodes.EgressB
+	}
+	for i := range inputs {
+		inputs[i].Egress = subEgress
+	}
 	updated, err := m.nodes.ReplaceSubscription(id, inputs)
 	if err != nil {
 		return Subscription{}, m.recordFailure(index, "node validation failed")
@@ -183,12 +207,23 @@ func (m *Manager) Refresh(ctx context.Context, id string) (Subscription, error) 
 	return public(next.Subscriptions[index]), nil
 }
 
-func (m *Manager) makeStored(input Input, existing string) (storedSubscription, error) {
+func (m *Manager) makeStored(input Input, existing storedSubscription) (storedSubscription, error) {
 	name := strings.TrimSpace(input.Name)
 	if name == "" {
 		return storedSubscription{}, errors.New("subscription name is required")
 	}
-	protected, host := existing, ""
+	egress := strings.ToLower(strings.TrimSpace(input.Egress))
+	if egress == "" {
+		if existing.Egress != "" {
+			egress = existing.Egress
+		} else {
+			egress = nodes.EgressB
+		}
+	}
+	if egress != nodes.EgressA && egress != nodes.EgressB {
+		return storedSubscription{}, errors.New("subscription egress must be 'a' or 'b'")
+	}
+	protected, host := existing.ProtectedURL, ""
 	if strings.TrimSpace(input.URL) != "" {
 		parsed, err := validateSubscriptionURL(input.URL)
 		if err != nil {
@@ -200,8 +235,8 @@ func (m *Manager) makeStored(input Input, existing string) (storedSubscription, 
 		}
 		protected = base64.StdEncoding.EncodeToString(ciphertext)
 		host = parsed.Hostname()
-	} else if existing != "" {
-		address, err := m.unprotectURL(existing)
+	} else if existing.ProtectedURL != "" {
+		address, err := m.unprotectURL(existing.ProtectedURL)
 		if err != nil {
 			return storedSubscription{}, err
 		}
@@ -210,7 +245,7 @@ func (m *Manager) makeStored(input Input, existing string) (storedSubscription, 
 	} else {
 		return storedSubscription{}, errors.New("subscription URL is required")
 	}
-	return storedSubscription{Name: name, ProtectedURL: protected, Host: host}, nil
+	return storedSubscription{Name: name, ProtectedURL: protected, Host: host, Egress: egress}, nil
 }
 
 func validateSubscriptionURL(value string) (*url.URL, error) {
@@ -327,7 +362,19 @@ func (m *Manager) save(next state) error {
 }
 
 func public(item storedSubscription) Subscription {
-	return Subscription{ID: item.ID, Name: item.Name, Host: item.Host, NodeCount: item.NodeCount, UpdatedAt: item.UpdatedAt, LastError: item.LastError}
+	egress := item.Egress
+	if egress == "" {
+		egress = nodes.EgressB
+	}
+	return Subscription{
+		ID:        item.ID,
+		Name:      item.Name,
+		Host:      item.Host,
+		Egress:    egress,
+		NodeCount: item.NodeCount,
+		UpdatedAt: item.UpdatedAt,
+		LastError: item.LastError,
+	}
 }
 
 func clone(value state) state {

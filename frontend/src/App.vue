@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, onUnmounted, ref, watch } from 'vue'
-import { AddProxyNode, AddSubscription, ApplyCoreConfiguration, ApplySelectedProxyConfiguration, ChangeSecurityPIN, ConfigureSRSSource, DeleteProxyNode, DeleteSRSSource, DeleteSubscription, DisableSecurityPIN, EnableSecurityPIN, ExportDiagnosticBundle, GetApplicationConfigDirectory, GetApplicationConfigInfo, GetAutostartStatus, GetConnectionObservationEnabled, GetCoreStatus, GetDNSPresets, GetDNSSettings, GetInterfaceSnapshot, GetIPv6Policy, GetObservations, GetProxySelection, GetRecoveryStatus, GetRuleSettings, GetSecurityStatus, GetSRSPresets, GetStatus, GetTrafficBudgetStatus, InspectProcessRules, ListProxyNodes, ListSRSSources, ListSubscriptions, PreviewCoreRules, PreviewDiagnosticBundle, RecordApplicationLog, RefreshSRSSource, RefreshSubscription, RepairApplicationSettings, ResetApplicationSettings, ResetInterfaceSelection, ResetTrafficBudget, ResetWindowsNetworkStack, RunHealthProbe, SelectInterfaces, SelectProxyChain, SelectProxyNode, SetAutostartEnabled, SetConnectionObservationEnabled, SetDNSSettings, SetIPv6Policy, SetProxyMode, SetProxyNodeFavorite, SetRuleSettings, SetTrafficBudget, SpeedTestProxyNodes, StopCore, TestDNSServer, TestProxyChain, TestProxyNode, UnlockSecurityVault, UpdateProxyNode, UpdateSubscription, ValidateCoreConfiguration, ValidateSelectedProxyConfiguration } from '../wailsjs/go/main/App'
+import { AddProxyNode, AddSubscription, ApplyCoreConfiguration, ApplySelectedProxyConfiguration, ChangeSecurityPIN, ConfigureSRSSource, DeleteProxyNode, DeleteSRSSource, DeleteSubscription, DisableSecurityPIN, EnableSecurityPIN, ExportDiagnosticBundle, GetApplicationConfigDirectory, GetApplicationConfigInfo, GetAutostartStatus, GetConnectionObservationEnabled, GetCoreStatus, GetDNSPresets, GetDNSSettings, GetInterfaceSnapshot, GetIPv6Policy, GetObservations, GetProxySelection, GetRecoveryStatus, GetRuleSettings, GetSecurityStatus, GetSRSPresets, GetStatus, GetTrafficBudgetStatus, InspectProcessRules, ListProxyNodes, ListSRSSources, ListSubscriptions, PreviewCoreRules, PreviewDiagnosticBundle, RecordApplicationLog, RefreshSRSSource, RefreshSubscription, RepairApplicationSettings, ResetApplicationSettings, ResetInterfaceSelection, ResetTrafficBudget, ResetWindowsNetworkStack, RunHealthProbe, SelectInterfaces, SelectProxyChain, SelectProxyNode, SetAutostartEnabled, SetConnectionObservationEnabled, SetDNSSettings, SetIPv6Policy, SetProxyMode, SetProxyNodeEgress, SetProxyNodeFavorite, SetRuleSettings, SetTrafficBudget, SpeedTestProxyNodes, StopCore, TestDNSServer, TestProxyChain, TestProxyNode, UnlockSecurityVault, UpdateProxyNode, UpdateSubscription, ValidateCoreConfiguration, ValidateSelectedProxyConfiguration } from '../wailsjs/go/main/App'
 import type { config, core, interfacemanager, interfaces, main, nodes, observability, processrules, rulesettings, srssets, subscriptions } from '../wailsjs/go/models'
 import { EventsOn } from '../wailsjs/runtime/runtime'
 import type { ApplicationStatus } from './vite-env'
@@ -207,7 +207,7 @@ const chainTestResult = ref<nodes.TestResult | null>(null)
 const testingChain = ref(false)
 const subscriptionList = ref<subscriptions.Subscription[]>([])
 const subscriptionFormOpen = ref(false)
-const subscriptionForm = ref({ id: '', name: '', url: '' })
+const subscriptionForm = ref<{ id: string; name: string; url: string; egress: 'a' | 'b' }>({ id: '', name: '', url: '', egress: 'b' })
 const refreshingSubscriptionID = ref('')
 type InlineRuleType = 'domain-suffix' | 'domain' | 'ip' | 'process-name' | 'process-path'
 type RuleAction = 'a' | 'b' | 'c' | 'final' | 'reject'
@@ -1430,14 +1430,38 @@ async function toggleProxyFavorite(node: nodes.Node) {
   catch (reason) { error.value = `无法更新收藏：${messageOf(reason)}` }
 }
 
-function resetSubscriptionForm() { subscriptionForm.value = { id: '', name: '', url: '' }; subscriptionFormOpen.value = false }
-function editSubscription(item: subscriptions.Subscription) { subscriptionForm.value = { id: item.id, name: item.name, url: '' }; subscriptionFormOpen.value = true }
+async function toggleProxyNodeEgress(node: nodes.Node) {
+  if (isRunning.value) return
+  error.value = ''
+  const nextEgress = node.egress === 'a' ? 'b' : 'a'
+  try {
+    await SetProxyNodeEgress(node.id, nextEgress)
+    await refreshProxyState()
+    notice.value = `节点“${node.name}”出口已切换为出口 ${nextEgress.toUpperCase()}`
+  } catch (reason) {
+    error.value = `无法修改节点出口：${messageOf(reason)}`
+  }
+}
+
+function resetSubscriptionForm() {
+  subscriptionForm.value = { id: '', name: '', url: '', egress: 'b' }
+  subscriptionFormOpen.value = false
+}
+
+function editSubscription(item: subscriptions.Subscription) {
+  subscriptionForm.value = { id: item.id, name: item.name, url: '', egress: (item.egress as any) || 'b' }
+  subscriptionFormOpen.value = true
+}
+
 async function saveSubscription() {
   busy.value = true; error.value = ''
   try {
     if (subscriptionForm.value.id) await UpdateSubscription(subscriptionForm.value)
     else await AddSubscription(subscriptionForm.value)
-    subscriptionList.value = await ListSubscriptions(); resetSubscriptionForm(); notice.value = '订阅定义已安全保存。'
+    subscriptionList.value = await ListSubscriptions()
+    resetSubscriptionForm()
+    await refreshProxyState()
+    notice.value = '订阅定义已安全保存。'
   } catch (reason) { error.value = `无法保存订阅：${messageOf(reason)}` } finally { busy.value = false }
 }
 async function refreshSubscription(item: subscriptions.Subscription) {
@@ -2406,7 +2430,9 @@ onUnmounted(() => {
               <span v-if="isChainMode && isNodeInChain(node.id)" class="chain-pos-badge">
                 第 {{ chainNodeHopIndex(node.id) + 1 }} 跳 {{ chainNodeHopIndex(node.id) === 0 ? '(前置跳板)' : (chainNodeHopIndex(node.id) === (proxySelection?.selected_chain?.length || 0) - 1 && (proxySelection?.selected_chain?.length || 0) > 1) ? '(落地出口)' : '' }}
               </span>
-              <span>{{ node.egress === 'a' ? '出口 A' : '出口 B' }}</span>
+              <span :class="['proxy-meta-tag', { 'overridden-egress-tag': node.egress_overridden }]" :title="node.egress_overridden ? '此节点已单独自定义出口网卡' : undefined">
+                {{ node.egress === 'a' ? '出口 A' : '出口 B' }}<template v-if="node.egress_overridden"> (已覆盖)</template>
+              </span>
               <span v-for="tag in formatProxySummary(node)" :key="tag" class="proxy-meta-tag">{{ tag }}</span>
               <span :class="['credential-tag', { none: !(node.has_secret || node.has_password) }]">
                 {{ (node.has_secret || node.has_password) ? '🔒 已保存凭据' : '未设凭据' }}
@@ -2451,7 +2477,16 @@ onUnmounted(() => {
                 <button class="secondary" type="button" :disabled="isRunning" :title="isRunning ? '核心运行中，禁止修改节点' : '编辑节点'" @click="editProxyNode(node)">编辑</button>
                 <button class="delete-button" type="button" :disabled="isRunning" :title="isRunning ? '核心运行中，禁止删除节点' : '删除节点'" @click="deleteProxyNode(node)">删除</button>
               </template>
-              <span v-else class="subscription-badge">订阅节点</span>
+              <template v-else>
+                <button
+                  class="secondary"
+                  type="button"
+                  :disabled="isRunning"
+                  :title="isRunning ? '核心运行中，禁止修改出口' : `切换此节点至出口 ${node.egress === 'a' ? 'B' : 'A'}`"
+                  @click="toggleProxyNodeEgress(node)"
+                >切到出口 {{ node.egress === 'a' ? 'B' : 'A' }}</button>
+                <span class="subscription-badge">订阅节点</span>
+              </template>
             </div>
           </article>
         </section>
@@ -2459,11 +2494,17 @@ onUnmounted(() => {
         <form v-if="subscriptionFormOpen" class="subscription-form" @submit.prevent="saveSubscription">
           <label>订阅名称<input v-model.trim="subscriptionForm.name" required maxlength="80"></label>
           <label>HTTPS / 局域网 HTTP 地址<input v-model.trim="subscriptionForm.url" :required="!subscriptionForm.id" type="url" :placeholder="subscriptionForm.id ? '留空则保留加密地址' : 'https://example.com/nodes.json 或 http://192.168.1.50/nodes.json'"></label>
+          <label>默认出口网卡
+            <select v-model="subscriptionForm.egress">
+              <option value="b">出口 B (海外/代理出口)</option>
+              <option value="a">出口 A (国内/直连出口)</option>
+            </select>
+          </label>
           <div><button class="secondary" type="button" @click="resetSubscriptionForm">取消</button><button class="primary" type="submit" :disabled="busy">保存</button></div>
         </form>
         <section class="subscription-list" aria-label="订阅列表">
           <div v-if="!subscriptionList.length" class="proxy-empty">尚未添加订阅。</div>
-          <article v-for="item in subscriptionList" :key="item.id"><div><strong>{{ item.name }}</strong><small>{{ item.host }} · {{ item.node_count }} 个节点</small><span v-if="item.last_error" class="test-failed">{{ item.last_error }}</span></div><div class="proxy-actions"><button class="secondary" type="button" :disabled="refreshingSubscriptionID === item.id" @click="refreshSubscription(item)">{{ refreshingSubscriptionID === item.id ? '更新中' : '更新' }}</button><button class="secondary" type="button" @click="editSubscription(item)">编辑</button><button class="delete-button" type="button" @click="deleteSubscription(item)">删除</button></div></article>
+          <article v-for="item in subscriptionList" :key="item.id"><div><strong>{{ item.name }}</strong><small>{{ item.host }} · {{ item.node_count }} 个节点 · 默认出口 {{ item.egress === 'a' ? 'A' : 'B' }}</small><span v-if="item.last_error" class="test-failed">{{ item.last_error }}</span></div><div class="proxy-actions"><button class="secondary" type="button" :disabled="refreshingSubscriptionID === item.id" @click="refreshSubscription(item)">{{ refreshingSubscriptionID === item.id ? '更新中' : '更新' }}</button><button class="secondary" type="button" @click="editSubscription(item)">编辑</button><button class="delete-button" type="button" @click="deleteSubscription(item)">删除</button></div></article>
         </section>
       </template>
 

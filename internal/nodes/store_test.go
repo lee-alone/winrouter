@@ -275,6 +275,61 @@ func TestSubscriptionRefreshPreservesSelectedNode(t *testing.T) {
 	}
 }
 
+func TestSubscriptionEgressOverrideAndRefresh(t *testing.T) {
+	store, err := New(filepath.Join(t.TempDir(), "nodes.json"), testProtector{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	items, err := store.ReplaceSubscription("sub-egress", []Input{
+		{Name: "Node-1", Type: TypeHTTP, Server: "203.0.113.10", Port: 8080, Egress: EgressB},
+		{Name: "Node-2", Type: TypeHTTP, Server: "203.0.113.11", Port: 8080, Egress: EgressB},
+	})
+	if err != nil || len(items) != 2 {
+		t.Fatal(err)
+	}
+	if items[0].Egress != EgressB || items[0].EgressOverridden {
+		t.Fatalf("expected Node-1 default egress B and not overridden, got %s / %t", items[0].Egress, items[0].EgressOverridden)
+	}
+
+	// Manually override Node-1 egress to A
+	updatedNode1, err := store.SetNodeEgress(items[0].ID, EgressA, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updatedNode1.Egress != EgressA || !updatedNode1.EgressOverridden {
+		t.Fatalf("expected Node-1 egress A and overridden, got %s / %t", updatedNode1.Egress, updatedNode1.EgressOverridden)
+	}
+
+	// Refresh subscription where upstream still specifies default Egress B
+	refreshed, err := store.ReplaceSubscription("sub-egress", []Input{
+		{Name: "Node-1", Type: TypeHTTP, Server: "203.0.113.10", Port: 8080, Egress: EgressB},
+		{Name: "Node-2", Type: TypeHTTP, Server: "203.0.113.11", Port: 8080, Egress: EgressB},
+	})
+	if err != nil || len(refreshed) != 2 {
+		t.Fatal(err)
+	}
+	if refreshed[0].Egress != EgressA || !refreshed[0].EgressOverridden {
+		t.Fatalf("expected Node-1 to keep overridden egress A after refresh, got %s / %t", refreshed[0].Egress, refreshed[0].EgressOverridden)
+	}
+	if refreshed[1].Egress != EgressB || refreshed[1].EgressOverridden {
+		t.Fatalf("expected Node-2 to keep default egress B and not overridden, got %s / %t", refreshed[1].Egress, refreshed[1].EgressOverridden)
+	}
+
+	// Now test UpdateSubscriptionDefaultEgress changing default to A
+	if err := store.UpdateSubscriptionDefaultEgress("sub-egress", EgressA); err != nil {
+		t.Fatal(err)
+	}
+	list := store.List()
+	// Node-1 was overridden (was A), remains A and overridden
+	if list[0].Egress != EgressA || !list[0].EgressOverridden {
+		t.Fatalf("expected Node-1 to remain A, got %s / %t", list[0].Egress, list[0].EgressOverridden)
+	}
+	// Node-2 was not overridden, now changed to A
+	if list[1].Egress != EgressA || list[1].EgressOverridden {
+		t.Fatalf("expected Node-2 to change to A and not overridden, got %s / %t", list[1].Egress, list[1].EgressOverridden)
+	}
+}
+
 func TestNodeIdentityPreservesCase(t *testing.T) {
 	input1 := Input{
 		Name:           "Node1",

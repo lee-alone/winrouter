@@ -232,9 +232,10 @@ input { width: 100%; min-height: 42px; padding: 8px 10px; border: 1px solid #aeb
 .delete-button { border: 1px solid #d0aaa7; color: #8c302d; background: white; border-radius: 5px; cursor: pointer; }
 .proxy-empty { padding: 48px 0; color: #718082; text-align: center; }
 .subscription-badge { color: #42647d; font-size: 12px; font-weight: 600; white-space: nowrap; }
+.overridden-egress-tag { display: inline-flex; align-items: center; padding: 2px 7px; background: #fdf5ea; color: #8f5b1d; border: 1px solid #ebd3af; border-radius: 3px; font-size: 12px; white-space: nowrap; font-weight: 600; }
 .subscription-heading { display: flex; align-items: center; justify-content: space-between; gap: 24px; margin-top: 30px; padding: 22px 0; border-block: 1px solid #d5ddda; flex-wrap: wrap; }
 .subscription-heading p:not(.section-kicker) { margin: 0; color: #657478; font-size: 13px; }
-.subscription-form { display: grid; grid-template-columns: 1fr 2fr auto; align-items: end; gap: 16px; padding: 20px 0; border-bottom: 1px solid #d5ddda; }
+.subscription-form { display: grid; grid-template-columns: 1fr 2fr 1.2fr auto; align-items: end; gap: 16px; padding: 20px 0; border-bottom: 1px solid #d5ddda; }
 .subscription-form label { display: grid; gap: 6px; color: #60706d; font-size: 12px; }
 .subscription-form > div { display: flex; gap: 8px; flex-wrap: wrap; }
 .subscription-list article { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 16px 0; border-bottom: 1px solid #dce2e0; flex-wrap: wrap; }

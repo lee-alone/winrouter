@@ -218,6 +218,10 @@ export function SetProxyMode(arg1) {
   return window['go']['main']['App']['SetProxyMode'](arg1);
 }
 
+export function SetProxyNodeEgress(arg1, arg2) {
+  return window['go']['main']['App']['SetProxyNodeEgress'](arg1, arg2);
+}
+
 export function SetProxyNodeFavorite(arg1, arg2) {
   return window['go']['main']['App']['SetProxyNodeFavorite'](arg1, arg2);
 }

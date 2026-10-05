@@ -449,6 +449,38 @@ func (a *App) SaveProxyNode(input nodes.Input) (nodes.Node, error) {
 	return a.UpdateProxyNode(input)
 }
 
+func (a *App) SetProxyNodeEgress(id string, egress string) (nodes.Node, error) {
+	if a.isCoreRunning() {
+		return nodes.Node{}, errors.New("cannot modify proxy egress while core is running; please stop the core first")
+	}
+	store, err := a.getNodeStore()
+	if err != nil {
+		return nodes.Node{}, err
+	}
+	egress = strings.ToLower(strings.TrimSpace(egress))
+	if egress != nodes.EgressA && egress != nodes.EgressB {
+		return nodes.Node{}, errors.New("proxy node egress must be 'a' or 'b'")
+	}
+	node, err := store.Get(id)
+	if err != nil {
+		return nodes.Node{}, err
+	}
+	isOverridden := false
+	if node.SubscriptionID != "" && a.subscriptions != nil {
+		if sub, err := a.subscriptions.Get(node.SubscriptionID); err == nil {
+			isOverridden = (sub.Egress != egress)
+		} else {
+			isOverridden = true
+		}
+	}
+	result, err := store.SetNodeEgress(id, egress, isOverridden)
+	if err != nil {
+		return nodes.Node{}, err
+	}
+	a.observations.Log(observability.LevelInfo, "proxy", "Proxy node egress updated", "", map[string]any{"node_id": result.ID, "egress": result.Egress, "overridden": result.EgressOverridden})
+	return result, nil
+}
+
 func (a *App) DeleteProxyNode(id string) error {
 	if a.isCoreRunning() {
 		return errors.New("cannot delete proxy node while core is running; please stop the core first")

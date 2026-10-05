@@ -1225,6 +1225,7 @@ export namespace nodes {
 	    chain_position?: number;
 	    subscription_id?: string;
 	    favorite: boolean;
+	    egress_overridden?: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new Node(source);
@@ -1249,6 +1250,7 @@ export namespace nodes {
 	        this.chain_position = source["chain_position"];
 	        this.subscription_id = source["subscription_id"];
 	        this.favorite = source["favorite"];
+	        this.egress_overridden = source["egress_overridden"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -1843,6 +1845,7 @@ export namespace subscriptions {
 	    id?: string;
 	    name: string;
 	    url: string;
+	    egress?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new Input(source);
@@ -1853,12 +1856,14 @@ export namespace subscriptions {
 	        this.id = source["id"];
 	        this.name = source["name"];
 	        this.url = source["url"];
+	        this.egress = source["egress"];
 	    }
 	}
 	export class Subscription {
 	    id: string;
 	    name: string;
 	    host: string;
+	    egress: string;
 	    node_count: number;
 	    // Go type: time
 	    updated_at?: any;
@@ -1873,6 +1878,7 @@ export namespace subscriptions {
 	        this.id = source["id"];
 	        this.name = source["name"];
 	        this.host = source["host"];
+	        this.egress = source["egress"];
 	        this.node_count = source["node_count"];
 	        this.updated_at = this.convertValues(source["updated_at"], null);
 	        this.last_error = source["last_error"];

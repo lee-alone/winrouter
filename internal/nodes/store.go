@@ -246,6 +246,70 @@ func (s *Store) CommitResolvedIP(id, address string) (Node, error) {
 	return publicNode(next.Nodes[index], next.Nodes[index].ID == next.SelectedID), nil
 }
 
+func (s *Store) Get(id string) (Node, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	index := indexByID(s.state.Nodes, strings.TrimSpace(id))
+	if index < 0 {
+		return Node{}, fmt.Errorf("node %q not found", id)
+	}
+	return publicNode(s.state.Nodes[index], s.state.Nodes[index].ID == s.state.SelectedID), nil
+}
+
+func (s *Store) SetNodeEgress(id string, egress string, overridden bool) (Node, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	id = strings.TrimSpace(id)
+	egress = strings.ToLower(strings.TrimSpace(egress))
+	if egress != EgressA && egress != EgressB {
+		return Node{}, errors.New("node egress must be 'a' or 'b'")
+	}
+	index := indexByID(s.state.Nodes, id)
+	if index < 0 {
+		return Node{}, fmt.Errorf("node %q not found", id)
+	}
+	next := cloneState(s.state)
+	next.Nodes[index].Egress = egress
+	if next.Nodes[index].SubscriptionID != "" {
+		next.Nodes[index].EgressOverridden = overridden
+	}
+	if err := s.save(next); err != nil {
+		return Node{}, err
+	}
+	s.state = next
+	return publicNode(next.Nodes[index], next.Nodes[index].ID == next.SelectedID), nil
+}
+
+func (s *Store) UpdateSubscriptionDefaultEgress(subscriptionID string, newEgress string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	subscriptionID = strings.TrimSpace(subscriptionID)
+	newEgress = strings.ToLower(strings.TrimSpace(newEgress))
+	if newEgress != EgressA && newEgress != EgressB {
+		return errors.New("subscription egress must be 'a' or 'b'")
+	}
+	next := cloneState(s.state)
+	changed := false
+	for i := range next.Nodes {
+		if next.Nodes[i].SubscriptionID == subscriptionID {
+			if !next.Nodes[i].EgressOverridden {
+				if next.Nodes[i].Egress != newEgress {
+					next.Nodes[i].Egress = newEgress
+					changed = true
+				}
+			}
+		}
+	}
+	if !changed {
+		return nil
+	}
+	if err := s.save(next); err != nil {
+		return err
+	}
+	s.state = next
+	return nil
+}
+
 func (s *Store) ReplaceSubscription(subscriptionID string, inputs []Input) ([]Node, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -255,12 +319,18 @@ func (s *Store) ReplaceSubscription(subscriptionID string, inputs []Input) ([]No
 	}
 
 	favorites := make(map[string]bool)
+	egressOverrides := make(map[string]string)
+	egressOverriddenMap := make(map[string]bool)
 	var selectedIdentity string
 	for _, existing := range s.state.Nodes {
 		if existing.SubscriptionID == subscriptionID {
 			identity := s.storedNodeIdentity(existing)
 			if existing.Favorite {
 				favorites[identity] = true
+			}
+			if existing.EgressOverridden {
+				egressOverrides[identity] = existing.Egress
+				egressOverriddenMap[identity] = true
 			}
 			if existing.ID == s.state.SelectedID {
 				selectedIdentity = identity
@@ -273,6 +343,10 @@ func (s *Store) ReplaceSubscription(subscriptionID string, inputs []Input) ([]No
 	for _, input := range inputs {
 		input.ID = ""
 		identityKey := inputIdentity(input)
+		overridden := egressOverriddenMap[identityKey]
+		if overridden {
+			input.Egress = egressOverrides[identityKey]
+		}
 		item, err := s.makeStored(input, "")
 		if err != nil {
 			return nil, err
@@ -283,6 +357,7 @@ func (s *Store) ReplaceSubscription(subscriptionID string, inputs []Input) ([]No
 		}
 		item.SubscriptionID = subscriptionID
 		item.Favorite = favorites[identityKey]
+		item.EgressOverridden = overridden
 		if selectedIdentity != "" && selectedIdentity == identityKey && newSelectedID == "" {
 			newSelectedID = item.ID
 		}
@@ -800,9 +875,10 @@ func publicNode(item storedNode, selected bool) Node {
 		HasSecret:      item.ProtectedSecret != "",
 		HasPassword:    item.ProtectedSecret != "",
 		Username:       username,
-		Selected:       selected,
-		SubscriptionID: item.SubscriptionID,
-		Favorite:       item.Favorite,
+		Selected:         selected,
+		SubscriptionID:   item.SubscriptionID,
+		Favorite:         item.Favorite,
+		EgressOverridden: item.EgressOverridden,
 	}
 }
 
@@ -831,12 +907,8 @@ func (s *Store) storedNodeIdentity(item storedNode) string {
 	if item.Transport != nil && item.Transport.Type != "" {
 		transportKey = fmt.Sprintf("%s|%s|%s", strings.ToLower(item.Transport.Type), item.Transport.Path, strings.ToLower(item.Transport.Host))
 	}
-	egress := strings.ToLower(item.Egress)
-	if egress == "" {
-		egress = EgressB
-	}
-	return fmt.Sprintf("%s|%s|%d|%s|%s|%s|%s|%s|%s|%s",
-		strings.ToLower(item.Type), strings.ToLower(item.Server), item.Port, egress,
+	return fmt.Sprintf("%s|%s|%d|%s|%s|%s|%s|%s|%s",
+		strings.ToLower(item.Type), strings.ToLower(item.Server), item.Port,
 		item.Username, strings.ToLower(item.Method), strings.ToLower(item.Flow), secret, tlsKey, transportKey)
 }
 
@@ -865,12 +937,8 @@ func inputIdentity(input Input) string {
 	if username == "" && input.Type != TypeShadowsocks {
 		username = input.Username
 	}
-	egress := strings.ToLower(input.Egress)
-	if egress == "" {
-		egress = EgressB
-	}
-	return fmt.Sprintf("%s|%s|%d|%s|%s|%s|%s|%s|%s|%s",
-		strings.ToLower(input.Type), strings.ToLower(input.Server), input.Port, egress,
+	return fmt.Sprintf("%s|%s|%d|%s|%s|%s|%s|%s|%s",
+		strings.ToLower(input.Type), strings.ToLower(input.Server), input.Port,
 		username, strings.ToLower(method), strings.ToLower(auth.Flow), secret, tlsKey, transportKey)
 }
 

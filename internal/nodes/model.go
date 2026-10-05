@@ -91,8 +91,9 @@ type Node struct {
 	Username       string             `json:"username,omitempty"` // Legacy compatibility
 	Selected       bool               `json:"selected"`
 	ChainPosition  int                `json:"chain_position,omitempty"`
-	SubscriptionID string             `json:"subscription_id,omitempty"`
-	Favorite       bool               `json:"favorite"`
+	SubscriptionID   string             `json:"subscription_id,omitempty"`
+	Favorite         bool               `json:"favorite"`
+	EgressOverridden bool               `json:"egress_overridden,omitempty"`
 }
 
 type Credentials struct {
@@ -124,21 +125,22 @@ type TestResult struct {
 }
 
 type storedNode struct {
-	ID              string         `json:"id"`
-	Name            string         `json:"name"`
-	Type            string         `json:"type"`
-	Server          string         `json:"server"`
-	ResolvedIP      string         `json:"resolved_ip,omitempty"`
-	Port            uint16         `json:"port"`
-	Egress          string         `json:"egress"`
-	Username        string         `json:"username,omitempty"`
-	Method          string         `json:"method,omitempty"`
-	Flow            string         `json:"flow,omitempty"`
-	TLS             *TLSNode       `json:"tls,omitempty"`
-	Transport       *TransportNode `json:"transport,omitempty"`
-	ProtectedSecret string         `json:"protected_secret,omitempty"`
-	SubscriptionID  string         `json:"subscription_id,omitempty"`
-	Favorite        bool           `json:"favorite,omitempty"`
+	ID               string         `json:"id"`
+	Name             string         `json:"name"`
+	Type             string         `json:"type"`
+	Server           string         `json:"server"`
+	ResolvedIP       string         `json:"resolved_ip,omitempty"`
+	Port             uint16         `json:"port"`
+	Egress           string         `json:"egress"`
+	Username         string         `json:"username,omitempty"`
+	Method           string         `json:"method,omitempty"`
+	Flow             string         `json:"flow,omitempty"`
+	TLS              *TLSNode       `json:"tls,omitempty"`
+	Transport        *TransportNode `json:"transport,omitempty"`
+	ProtectedSecret  string         `json:"protected_secret,omitempty"`
+	SubscriptionID   string         `json:"subscription_id,omitempty"`
+	Favorite         bool           `json:"favorite,omitempty"`
+	EgressOverridden bool           `json:"egress_overridden,omitempty"`
 
 	// Legacy fields for migration
 	LegacyProtected string `json:"protected_password,omitempty"`

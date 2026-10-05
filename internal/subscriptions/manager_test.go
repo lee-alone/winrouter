@@ -202,3 +202,64 @@ func TestRefreshRedirectSafety(t *testing.T) {
 		t.Fatal("expected error on public HTTPS redirect to localhost (DNS rebinding defense)")
 	}
 }
+
+func TestSubscriptionDefaultEgressAndRefresh(t *testing.T) {
+	directory := t.TempDir()
+	document := `{"version":1,"nodes":[{"name":"node-a","type":"http","server":"203.0.113.10","port":8080}]}`
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(document))
+	}))
+	defer server.Close()
+
+	nodeStore, err := nodes.New(filepath.Join(directory, "nodes.json"), testProtector{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager, err := New(filepath.Join(directory, "subscriptions.json"), testProtector{}, nodeStore)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// 1. Add subscription with explicit Egress A
+	sub, err := manager.Add(Input{Name: "egress-test", URL: server.URL, Egress: nodes.EgressA})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sub.Egress != nodes.EgressA {
+		t.Fatalf("expected subscription egress A, got %s", sub.Egress)
+	}
+
+	// Verify Get
+	got, err := manager.Get(sub.ID)
+	if err != nil || got.Egress != nodes.EgressA {
+		t.Fatalf("expected manager.Get to return egress A, got %#v, err: %v", got, err)
+	}
+
+	// 2. Refresh subscription - node should be created with Egress A
+	sub, err = manager.Refresh(context.Background(), sub.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nodesList := nodeStore.List()
+	if len(nodesList) != 1 {
+		t.Fatalf("expected 1 node, got %d", len(nodesList))
+	}
+	if nodesList[0].Egress != nodes.EgressA {
+		t.Fatalf("expected node egress A from subscription, got %s", nodesList[0].Egress)
+	}
+
+	// 3. Update subscription default egress to B
+	updatedSub, err := manager.UpdateDefinition(Input{ID: sub.ID, Name: "egress-test", Egress: nodes.EgressB})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updatedSub.Egress != nodes.EgressB {
+		t.Fatalf("expected updated subscription egress B, got %s", updatedSub.Egress)
+	}
+
+	// Node in nodeStore should now have egress B
+	nodesList = nodeStore.List()
+	if nodesList[0].Egress != nodes.EgressB {
+		t.Fatalf("expected node egress B after subscription egress update, got %s", nodesList[0].Egress)
+	}
+}
