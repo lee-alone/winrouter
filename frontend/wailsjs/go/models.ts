@@ -1,3 +1,127 @@
+export namespace app {
+	
+	export class ApplicationStatus {
+	    name: string;
+	    version: string;
+	    commit: string;
+	    coreVersion: string;
+	    ready: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new ApplicationStatus(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.version = source["version"];
+	        this.commit = source["commit"];
+	        this.coreVersion = source["coreVersion"];
+	        this.ready = source["ready"];
+	    }
+	}
+	export class NetworkResetStep {
+	    command: string;
+	    success: boolean;
+	    exit_code: number;
+	    output?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new NetworkResetStep(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.command = source["command"];
+	        this.success = source["success"];
+	        this.exit_code = source["exit_code"];
+	        this.output = source["output"];
+	    }
+	}
+	export class NetworkResetResult {
+	    success: boolean;
+	    restart_required: boolean;
+	    steps: NetworkResetStep[];
+	
+	    static createFrom(source: any = {}) {
+	        return new NetworkResetResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.success = source["success"];
+	        this.restart_required = source["restart_required"];
+	        this.steps = this.convertValues(source["steps"], NetworkResetStep);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	
+	export class ObservationSnapshot {
+	    logs: observability.LogEntry[];
+	    probes: observability.ProbeResult[];
+	    counters: observability.InterfaceCounter[];
+	    rule_sets: observability.RuleSetMetadata[];
+	    connections: observability.ConnectionSummary;
+	    rule_hits: observability.RuleHit[];
+	    connection_observation: boolean;
+	    connection_events: clashapi.Summary[];
+	    traffic_budget: trafficbudget.Status;
+	
+	    static createFrom(source: any = {}) {
+	        return new ObservationSnapshot(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.logs = this.convertValues(source["logs"], observability.LogEntry);
+	        this.probes = this.convertValues(source["probes"], observability.ProbeResult);
+	        this.counters = this.convertValues(source["counters"], observability.InterfaceCounter);
+	        this.rule_sets = this.convertValues(source["rule_sets"], observability.RuleSetMetadata);
+	        this.connections = this.convertValues(source["connections"], observability.ConnectionSummary);
+	        this.rule_hits = this.convertValues(source["rule_hits"], observability.RuleHit);
+	        this.connection_observation = source["connection_observation"];
+	        this.connection_events = this.convertValues(source["connection_events"], clashapi.Summary);
+	        this.traffic_budget = this.convertValues(source["traffic_budget"], trafficbudget.Status);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+
+}
+
 export namespace autostart {
 	
 	export class Status {
@@ -904,130 +1028,6 @@ export namespace interfaces {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.prefixes = this.convertValues(source["prefixes"], DirectPrefix);
 	        this.overlaps = this.convertValues(source["overlaps"], PrefixOverlap);
-	    }
-	
-		convertValues(a: any, classs: any, asMap: boolean = false): any {
-		    if (!a) {
-		        return a;
-		    }
-		    if (a.slice && a.map) {
-		        return (a as any[]).map(elem => this.convertValues(elem, classs));
-		    } else if ("object" === typeof a) {
-		        if (asMap) {
-		            for (const key of Object.keys(a)) {
-		                a[key] = new classs(a[key]);
-		            }
-		            return a;
-		        }
-		        return new classs(a);
-		    }
-		    return a;
-		}
-	}
-
-}
-
-export namespace main {
-	
-	export class ApplicationStatus {
-	    name: string;
-	    version: string;
-	    commit: string;
-	    coreVersion: string;
-	    ready: boolean;
-	
-	    static createFrom(source: any = {}) {
-	        return new ApplicationStatus(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.name = source["name"];
-	        this.version = source["version"];
-	        this.commit = source["commit"];
-	        this.coreVersion = source["coreVersion"];
-	        this.ready = source["ready"];
-	    }
-	}
-	export class NetworkResetStep {
-	    command: string;
-	    success: boolean;
-	    exit_code: number;
-	    output?: string;
-	
-	    static createFrom(source: any = {}) {
-	        return new NetworkResetStep(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.command = source["command"];
-	        this.success = source["success"];
-	        this.exit_code = source["exit_code"];
-	        this.output = source["output"];
-	    }
-	}
-	export class NetworkResetResult {
-	    success: boolean;
-	    restart_required: boolean;
-	    steps: NetworkResetStep[];
-	
-	    static createFrom(source: any = {}) {
-	        return new NetworkResetResult(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.success = source["success"];
-	        this.restart_required = source["restart_required"];
-	        this.steps = this.convertValues(source["steps"], NetworkResetStep);
-	    }
-	
-		convertValues(a: any, classs: any, asMap: boolean = false): any {
-		    if (!a) {
-		        return a;
-		    }
-		    if (a.slice && a.map) {
-		        return (a as any[]).map(elem => this.convertValues(elem, classs));
-		    } else if ("object" === typeof a) {
-		        if (asMap) {
-		            for (const key of Object.keys(a)) {
-		                a[key] = new classs(a[key]);
-		            }
-		            return a;
-		        }
-		        return new classs(a);
-		    }
-		    return a;
-		}
-	}
-	
-	export class ObservationSnapshot {
-	    logs: observability.LogEntry[];
-	    probes: observability.ProbeResult[];
-	    counters: observability.InterfaceCounter[];
-	    rule_sets: observability.RuleSetMetadata[];
-	    connections: observability.ConnectionSummary;
-	    rule_hits: observability.RuleHit[];
-	    connection_observation: boolean;
-	    connection_events: clashapi.Summary[];
-	    traffic_budget: trafficbudget.Status;
-	
-	    static createFrom(source: any = {}) {
-	        return new ObservationSnapshot(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.logs = this.convertValues(source["logs"], observability.LogEntry);
-	        this.probes = this.convertValues(source["probes"], observability.ProbeResult);
-	        this.counters = this.convertValues(source["counters"], observability.InterfaceCounter);
-	        this.rule_sets = this.convertValues(source["rule_sets"], observability.RuleSetMetadata);
-	        this.connections = this.convertValues(source["connections"], observability.ConnectionSummary);
-	        this.rule_hits = this.convertValues(source["rule_hits"], observability.RuleHit);
-	        this.connection_observation = source["connection_observation"];
-	        this.connection_events = this.convertValues(source["connection_events"], clashapi.Summary);
-	        this.traffic_budget = this.convertValues(source["traffic_budget"], trafficbudget.Status);
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

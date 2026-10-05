@@ -9,6 +9,7 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
 
+	"winrouter/internal/app"
 	"winrouter/internal/singleinstance"
 )
 
@@ -30,7 +31,7 @@ func main() {
 	}
 	defer instanceLock.Close()
 
-	application := NewApp()
+	application := app.New()
 	if err = wails.Run(&options.App{
 		Title: "WinRouter", Width: 1120, Height: 720, MinWidth: 840, MinHeight: 560,
 		AssetServer:   &assetserver.Options{Assets: frontendAssets},

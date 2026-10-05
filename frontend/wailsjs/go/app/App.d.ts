@@ -10,7 +10,7 @@ import {configdir} from '../models';
 import {autostart} from '../models';
 import {dnssettings} from '../models';
 import {interfacemanager} from '../models';
-import {main} from '../models';
+import {app} from '../models';
 import {recovery} from '../models';
 import {rulesettings} from '../models';
 import {trafficbudget} from '../models';
@@ -61,7 +61,7 @@ export function GetIPv6Policy():Promise<string>;
 
 export function GetInterfaceSnapshot():Promise<interfacemanager.Snapshot>;
 
-export function GetObservations():Promise<main.ObservationSnapshot>;
+export function GetObservations():Promise<app.ObservationSnapshot>;
 
 export function GetProxySelection():Promise<nodes.ProxySelection>;
 
@@ -73,7 +73,7 @@ export function GetSRSPresets():Promise<Array<srssets.Preset>>;
 
 export function GetSecurityStatus():Promise<nodes.SecurityStatus>;
 
-export function GetStatus():Promise<main.ApplicationStatus>;
+export function GetStatus():Promise<app.ApplicationStatus>;
 
 export function GetTrafficBudgetStatus():Promise<trafficbudget.Status>;
 
@@ -103,7 +103,7 @@ export function ResetInterfaceSelection():Promise<interfacemanager.Snapshot>;
 
 export function ResetTrafficBudget():Promise<trafficbudget.Status>;
 
-export function ResetWindowsNetworkStack():Promise<main.NetworkResetResult>;
+export function ResetWindowsNetworkStack():Promise<app.NetworkResetResult>;
 
 export function RunHealthProbe(arg1:observability.ProbeRequest):Promise<observability.ProbeResult>;
 

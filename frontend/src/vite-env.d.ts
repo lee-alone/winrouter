@@ -16,6 +16,9 @@ export interface ApplicationStatus {
 
 declare global {
   interface Window {
-    go?: { main?: { App?: { GetStatus(): Promise<ApplicationStatus> } } }
+    go?: {
+      app?: { App?: { GetStatus(): Promise<ApplicationStatus> } }
+      main?: { App?: { GetStatus(): Promise<ApplicationStatus> } }
+    }
   }
 }
