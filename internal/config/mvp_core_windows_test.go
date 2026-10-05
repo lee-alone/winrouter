@@ -14,8 +14,17 @@ import (
 	"winrouter/internal/core"
 )
 
+func requireCore(t *testing.T) string {
+	t.Helper()
+	p, err := core.Locate()
+	if err != nil {
+		t.Skip("sing-box core executable is not available in environment; skipping core execution test")
+	}
+	return p
+}
+
 func TestLockedCoreAcceptsLocalBinaryRuleSets(t *testing.T) {
-	corePath := filepath.Join("..", "..", "resources", "core", "sing-box.exe")
+	corePath := requireCore(t)
 	directory := t.TempDir()
 	sourcePath := filepath.Join(directory, "domain.json")
 	binaryPath := filepath.Join(directory, "domain.srs")
@@ -43,7 +52,7 @@ func TestGeneratedMVPPassesLockedSingBoxCheck(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	generated, report, err := ValidateMVPWithCore(ctx, fixtureInput(t), filepath.Join("..", "..", "resources", "core", "sing-box.exe"))
+	generated, report, err := ValidateMVPWithCore(ctx, fixtureInput(t), requireCore(t))
 	if err != nil {
 		t.Fatalf("ValidateMVPWithCore() error: %v", err)
 	}
@@ -58,7 +67,7 @@ func TestGeneratedConnectionObservationPassesLockedSingBoxCheck(t *testing.T) {
 	input.ConnectionAPISecret = "integration-test-secret"
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	if _, _, err := ValidateMVPWithCore(ctx, input, filepath.Join("..", "..", "resources", "core", "sing-box.exe")); err != nil {
+	if _, _, err := ValidateMVPWithCore(ctx, input, requireCore(t)); err != nil {
 		t.Fatalf("locked core rejected connection observation: %v", err)
 	}
 }
@@ -79,7 +88,7 @@ func TestLockedCoreAcceptsWindowsProcessMatchers(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	result, err := core.Validate(ctx, filepath.Join("..", "..", "resources", "core", "sing-box.exe"), core.LockedVersion, core.LockedSHA256, data)
+	result, err := core.ValidateCore(ctx, requireCore(t), data)
 	if err != nil {
 		t.Fatalf("locked core rejected Windows process matchers: %v", err)
 	}
@@ -104,7 +113,7 @@ func TestGeneratedProxySplitPassesLockedSingBoxCheck(t *testing.T) {
 	input.Proxy.Password = "secret"
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	generated, report, err := ValidateMVPWithCore(ctx, input, filepath.Join("..", "..", "resources", "core", "sing-box.exe"))
+	generated, report, err := ValidateMVPWithCore(ctx, input, requireCore(t))
 	if err != nil {
 		t.Fatalf("ValidateMVPWithCore() error: %v", err)
 	}
@@ -126,8 +135,8 @@ func TestGeneratedShadowsocksProxyPassesLockedSingBoxCheck(t *testing.T) {
 		{"aes-256-gcm", "shadowsocks-pass"},
 		{"chacha20-ietf-poly1305", "shadowsocks-pass"},
 		{"xchacha20-ietf-poly1305", "shadowsocks-pass"},
-		{"2022-blake3-aes-128-gcm", "MTIzNDU2Nzg5MDEyMzQ1Ng=="}, // 16 bytes base64
-		{"2022-blake3-aes-256-gcm", "YWVzMjU2Z2Ntc2VjcmV0MzJieXRlc3NlY3JldDEyMzQ="}, // 32 bytes base64
+		{"2022-blake3-aes-128-gcm", "MTIzNDU2Nzg5MDEyMzQ1Ng=="},                           // 16 bytes base64
+		{"2022-blake3-aes-256-gcm", "YWVzMjU2Z2Ntc2VjcmV0MzJieXRlc3NlY3JldDEyMzQ="},       // 32 bytes base64
 		{"2022-blake3-chacha20-poly1305", "YWVzMjU2Z2Ntc2VjcmV0MzJieXRlc3NlY3JldDEyMzQ="}, // 32 bytes base64
 	}
 
@@ -144,7 +153,7 @@ func TestGeneratedShadowsocksProxyPassesLockedSingBoxCheck(t *testing.T) {
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 			defer cancel()
-			generated, report, err := ValidateMVPWithCore(ctx, input, filepath.Join("..", "..", "resources", "core", "sing-box.exe"))
+			generated, report, err := ValidateMVPWithCore(ctx, input, requireCore(t))
 			if err != nil {
 				t.Fatalf("ValidateMVPWithCore() failed for method %s: %v", tc.method, err)
 			}
@@ -171,7 +180,7 @@ func TestGeneratedVMessProxyPassesLockedSingBoxCheck(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	generated, report, err := ValidateMVPWithCore(ctx, input, filepath.Join("..", "..", "resources", "core", "sing-box.exe"))
+	generated, report, err := ValidateMVPWithCore(ctx, input, requireCore(t))
 	if err != nil {
 		t.Fatalf("ValidateMVPWithCore() error: %v", err)
 	}
@@ -187,16 +196,16 @@ func TestGeneratedVLESSProxyPassesLockedSingBoxCheck(t *testing.T) {
 	input := fixtureInput(t)
 	input.DefaultOutbound = "c"
 	input.Proxy = &MVPProxy{
-		Type:      "vless",
-		Server:    "203.0.113.89",
-		Port:      443,
-		UUID:      "a8e678c0-8903-4402-8e99-20aadf1a7cd1",
-		Flow:      "xtls-rprx-vision",
-		TLS:       &MVPProxyTLS{Enabled: true, ServerName: "vless.example.com"},
+		Type:   "vless",
+		Server: "203.0.113.89",
+		Port:   443,
+		UUID:   "a8e678c0-8903-4402-8e99-20aadf1a7cd1",
+		Flow:   "xtls-rprx-vision",
+		TLS:    &MVPProxyTLS{Enabled: true, ServerName: "vless.example.com"},
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	generated, report, err := ValidateMVPWithCore(ctx, input, filepath.Join("..", "..", "resources", "core", "sing-box.exe"))
+	generated, report, err := ValidateMVPWithCore(ctx, input, requireCore(t))
 	if err != nil {
 		t.Fatalf("ValidateMVPWithCore() error: %v", err)
 	}
@@ -220,7 +229,7 @@ func TestGeneratedTrojanProxyPassesLockedSingBoxCheck(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	generated, report, err := ValidateMVPWithCore(ctx, input, filepath.Join("..", "..", "resources", "core", "sing-box.exe"))
+	generated, report, err := ValidateMVPWithCore(ctx, input, requireCore(t))
 	if err != nil {
 		t.Fatalf("ValidateMVPWithCore() error: %v", err)
 	}
@@ -245,7 +254,7 @@ func TestGeneratedProxyEgressAPassesLockedSingBoxCheck(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	generated, report, err := ValidateMVPWithCore(ctx, input, filepath.Join("..", "..", "resources", "core", "sing-box.exe"))
+	generated, report, err := ValidateMVPWithCore(ctx, input, requireCore(t))
 	if err != nil {
 		t.Fatalf("ValidateMVPWithCore() error: %v", err)
 	}

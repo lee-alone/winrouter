@@ -47,9 +47,9 @@ func validConfig() config.MVPConfig {
 	return config.MVPConfig{
 		SchemaVersion: config.SchemaVersion1,
 		TUN:           config.MVPTUN{Prefix: "172.19.0.0/30", Stack: "system"},
-		InterfaceA: config.MVPInterface{GUID: "{A}", BindInterface: "Wi-Fi"},
-		InterfaceB: config.MVPInterface{GUID: "{B}", BindInterface: "Ethernet"},
-		Domestic:   config.MVPDomestic{CIDRs: []string{"1.0.1.0/24"}, DomainSuffixes: []string{"cn"}},
+		InterfaceA:    config.MVPInterface{GUID: "{A}", BindInterface: "Wi-Fi"},
+		InterfaceB:    config.MVPInterface{GUID: "{B}", BindInterface: "Ethernet"},
+		Domestic:      config.MVPDomestic{CIDRs: []string{"1.0.1.0/24"}, DomainSuffixes: []string{"cn"}},
 		DNS: config.MVPDNS{
 			Domestic: config.MVPDNSServer{Type: "udp", Server: "223.5.5.5", Port: 53},
 			Global:   config.MVPDNSServer{Type: "tls", Server: "1.1.1.1", Port: 853, ServerName: "cloudflare-dns.com"},

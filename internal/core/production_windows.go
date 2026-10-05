@@ -32,7 +32,7 @@ func NewProductionController(options ProductionOptions) (*Controller, error) {
 	return NewController(ControllerOptions{
 		StateDirectory: options.StateDirectory,
 		Validate: func(ctx context.Context, data []byte) error {
-			_, err := Validate(ctx, options.CorePath, LockedVersion, LockedSHA256, data)
+			_, err := ValidateCore(ctx, options.CorePath, data)
 			return err
 		},
 		Launch: launcher.Start, Health: waitForCoreHealth, Restart: options.Restart,

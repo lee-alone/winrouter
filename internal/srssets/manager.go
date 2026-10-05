@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"embed"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -19,6 +20,9 @@ import (
 	"sync"
 	"time"
 )
+
+//go:embed embedded/*.srs
+var embeddedRules embed.FS
 
 const maxSRSSize = 32 << 20
 
@@ -36,6 +40,16 @@ var presets = []Preset{
 	{ID: "sagernet-geoip-cn", Name: "中国 IP (geoip-cn)", Kind: "ip", URL: "https://raw.githubusercontent.com/SagerNet/sing-geoip/rule-set/geoip-cn.srs", Upstream: "SagerNet/sing-geoip", License: "GPL-3.0; data licenses follow upstream"},
 	{ID: "sagernet-geosite-github", Name: "GitHub", Kind: "domain", URL: "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-github.srs", Upstream: "SagerNet/sing-geosite", License: "GPL-3.0; data licenses follow upstream"},
 	{ID: "sagernet-geosite-cloudflare", Name: "Cloudflare", Kind: "domain", URL: "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-cloudflare.srs", Upstream: "SagerNet/sing-geosite", License: "GPL-3.0; data licenses follow upstream"},
+	{ID: "sagernet-geosite-geolocation-!cn", Name: "非中国/被墙域名 (geolocation-!cn)", Kind: "domain", URL: "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-geolocation-!cn.srs", Upstream: "SagerNet/sing-geosite", License: "GPL-3.0; data licenses follow upstream"},
+	{ID: "sagernet-geosite-openai", Name: "OpenAI / ChatGPT", Kind: "domain", URL: "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-openai.srs", Upstream: "SagerNet/sing-geosite", License: "GPL-3.0; data licenses follow upstream"},
+	{ID: "sagernet-geosite-anthropic", Name: "Claude / Anthropic", Kind: "domain", URL: "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-anthropic.srs", Upstream: "SagerNet/sing-geosite", License: "GPL-3.0; data licenses follow upstream"},
+	{ID: "sagernet-geosite-google", Name: "Google", Kind: "domain", URL: "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-google.srs", Upstream: "SagerNet/sing-geosite", License: "GPL-3.0; data licenses follow upstream"},
+	{ID: "sagernet-geosite-youtube", Name: "YouTube", Kind: "domain", URL: "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-youtube.srs", Upstream: "SagerNet/sing-geosite", License: "GPL-3.0; data licenses follow upstream"},
+	{ID: "sagernet-geosite-telegram", Name: "Telegram", Kind: "domain", URL: "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-telegram.srs", Upstream: "SagerNet/sing-geosite", License: "GPL-3.0; data licenses follow upstream"},
+	{ID: "sagernet-geosite-steam", Name: "Steam", Kind: "domain", URL: "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-steam.srs", Upstream: "SagerNet/sing-geosite", License: "GPL-3.0; data licenses follow upstream"},
+	{ID: "sagernet-geosite-microsoft", Name: "Microsoft", Kind: "domain", URL: "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-microsoft.srs", Upstream: "SagerNet/sing-geosite", License: "GPL-3.0; data licenses follow upstream"},
+	{ID: "sagernet-geosite-apple", Name: "Apple", Kind: "domain", URL: "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-apple.srs", Upstream: "SagerNet/sing-geosite", License: "GPL-3.0; data licenses follow upstream"},
+	{ID: "sagernet-geosite-category-ads-all", Name: "广告与隐私追踪过滤", Kind: "domain", URL: "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-category-ads-all.srs", Upstream: "SagerNet/sing-geosite", License: "GPL-3.0; data licenses follow upstream"},
 }
 
 type Source struct {
@@ -89,9 +103,15 @@ func New(path, singBoxPath string) (*Manager, error) {
 		}
 		return nil
 	}
-	return newManager(path, validator, &http.Client{Timeout: 20 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error {
-		return errors.New("SRS redirects are disabled")
-	}})
+	return newManager(path, validator, &http.Client{
+		Timeout: 25 * time.Second,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 5 {
+				return errors.New("stopped after 5 redirects")
+			}
+			return nil
+		},
+	})
 }
 
 func newManager(path string, validator Validator, client *http.Client) (*Manager, error) {
@@ -99,8 +119,12 @@ func newManager(path string, validator Validator, client *http.Client) (*Manager
 		return nil, errors.New("SRS state path, validator, and HTTP client are required")
 	}
 	m := &Manager{path: path, validator: validator, client: client, state: state{SchemaVersion: 1, Sources: defaultSources()}}
+
+	migrateLegacySRS(filepath.Dir(path))
+
 	data, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
+		m.seedDefaults()
 		if err := m.save(m.state); err != nil {
 			return nil, err
 		}
@@ -131,6 +155,7 @@ func newManager(path string, validator Validator, client *http.Client) (*Manager
 			addedPreset = true
 		}
 	}
+	m.seedDefaults()
 	if addedPreset {
 		if err := m.save(m.state); err != nil {
 			return nil, fmt.Errorf("save SRS defaults: %w", err)
@@ -148,10 +173,41 @@ func defaultSources() []Source {
 	result := make([]Source, 0, len(presets))
 	for _, preset := range presets {
 		action := "a"
-		if preset.ID == "sagernet-geosite-github" || preset.ID == "sagernet-geosite-cloudflare" {
+		enabled := false
+		switch preset.ID {
+		case "sagernet-geosite-cn", "sagernet-geoip-cn":
+			action = "a"
+			enabled = true
+		case "sagernet-geosite-github", "sagernet-geosite-cloudflare":
 			action = "b"
+			enabled = true
+		case "sagernet-geosite-geolocation-!cn", "sagernet-geosite-openai":
+			action = "c"
+			enabled = true
+		case "sagernet-geosite-anthropic", "sagernet-geosite-google", "sagernet-geosite-youtube", "sagernet-geosite-telegram":
+			action = "c"
+			enabled = false
+		case "sagernet-geosite-steam", "sagernet-geosite-microsoft":
+			action = "b"
+			enabled = false
+		case "sagernet-geosite-apple":
+			action = "a"
+			enabled = false
+		case "sagernet-geosite-category-ads-all":
+			action = "reject"
+			enabled = false
 		}
-		result = append(result, Source{ID: preset.ID, Name: preset.Name, Kind: preset.Kind, PresetID: preset.ID, URL: preset.URL, Enabled: true, Action: action, Upstream: preset.Upstream, License: preset.License})
+		result = append(result, Source{
+			ID:       preset.ID,
+			Name:     preset.Name,
+			Kind:     preset.Kind,
+			PresetID: preset.ID,
+			URL:      preset.URL,
+			Enabled:  enabled,
+			Action:   action,
+			Upstream: preset.Upstream,
+			License:  preset.License,
+		})
 	}
 	return result
 }
@@ -231,6 +287,10 @@ func (m *Manager) Delete(id string) error {
 }
 
 func (m *Manager) Update(ctx context.Context, id string) (Source, error) {
+	return m.UpdateWithClient(ctx, id, nil)
+}
+
+func (m *Manager) UpdateWithClient(ctx context.Context, id string, client *http.Client) (Source, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	index := m.index(id)
@@ -238,30 +298,20 @@ func (m *Manager) Update(ctx context.Context, id string) (Source, error) {
 		return Source{}, errors.New("SRS source not found")
 	}
 	source := m.state.Sources[index]
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, source.URL, nil)
+	httpClient := m.client
+	if client != nil {
+		httpClient = client
+	}
+
+	data, err := fetchSRS(ctx, httpClient, source.URL)
 	if err != nil {
-		return Source{}, err
+		return m.fail(index, err.Error())
 	}
-	req.Header.Set("Accept", "application/octet-stream")
-	response, err := m.client.Do(req)
-	if err != nil {
-		return m.fail(index, "download failed")
-	}
-	defer response.Body.Close()
-	if response.StatusCode != http.StatusOK {
-		return m.fail(index, fmt.Sprintf("HTTP %d", response.StatusCode))
-	}
-	data, err := io.ReadAll(io.LimitReader(response.Body, maxSRSSize+1))
-	if err != nil || len(data) > maxSRSSize {
-		return m.fail(index, "invalid response size")
-	}
+
 	digest := sha256.Sum256(data)
 	actual := hex.EncodeToString(digest[:])
 	if source.ExpectedSHA256 != "" && actual != source.ExpectedSHA256 {
 		return m.fail(index, "SHA-256 mismatch")
-	}
-	if len(data) < 3 || string(data[:3]) != "SRS" {
-		return m.fail(index, "invalid SRS header")
 	}
 	temporary, err := os.CreateTemp(filepath.Dir(m.path), ".srs-*.tmp")
 	if err != nil {
@@ -296,6 +346,47 @@ func (m *Manager) Update(ctx context.Context, id string) (Source, error) {
 	return next.Sources[index], nil
 }
 
+func fetchSRS(ctx context.Context, client *http.Client, rawURL string) ([]byte, error) {
+	urls := []string{rawURL}
+	if strings.HasPrefix(rawURL, "https://raw.githubusercontent.com/") {
+		urls = append(urls, "https://ghfast.top/"+rawURL)
+	}
+	var lastErr error
+	for _, targetURL := range urls {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, targetURL, nil)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		req.Header.Set("Accept", "application/octet-stream")
+		response, err := client.Do(req)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		if response.StatusCode != http.StatusOK {
+			response.Body.Close()
+			lastErr = fmt.Errorf("HTTP %d", response.StatusCode)
+			continue
+		}
+		data, err := io.ReadAll(io.LimitReader(response.Body, maxSRSSize+1))
+		response.Body.Close()
+		if err != nil || len(data) > maxSRSSize {
+			lastErr = errors.New("invalid response size")
+			continue
+		}
+		if len(data) < 3 || string(data[:3]) != "SRS" {
+			lastErr = errors.New("invalid SRS header")
+			continue
+		}
+		return data, nil
+	}
+	if lastErr != nil {
+		return nil, lastErr
+	}
+	return nil, errors.New("download failed")
+}
+
 func (m *Manager) Active() ([]Active, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -319,8 +410,8 @@ func (m *Manager) Active() ([]Active, error) {
 }
 
 func validateSource(source Source) error {
-	if !regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$`).MatchString(source.ID) {
-		return errors.New("SRS id must contain only letters, numbers, underscore, or hyphen")
+	if !regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_!-]{0,63}$`).MatchString(source.ID) {
+		return errors.New("SRS id must contain only letters, numbers, underscore, exclamation, or hyphen")
 	}
 	if source.Name == "" || len([]rune(source.Name)) > 80 {
 		return errors.New("SRS name is required and must not exceed 80 characters")
@@ -373,7 +464,115 @@ func (m *Manager) fail(index int, message string) (Source, error) {
 }
 
 func (m *Manager) cachePath(id string) string {
-	return filepath.Join(filepath.Dir(m.path), "srs", id+".srs")
+	return filepath.Join(filepath.Dir(m.path), "geo", id+".srs")
+}
+
+func migrateLegacySRS(dir string) {
+	legacyDir := filepath.Join(dir, "srs")
+	geoDir := filepath.Join(dir, "geo")
+	entries, err := os.ReadDir(legacyDir)
+	if err != nil || len(entries) == 0 {
+		return
+	}
+	_ = os.MkdirAll(geoDir, 0o700)
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".srs") {
+			continue
+		}
+		src := filepath.Join(legacyDir, entry.Name())
+		dst := filepath.Join(geoDir, entry.Name())
+		if _, err := os.Stat(dst); os.IsNotExist(err) {
+			if data, err := os.ReadFile(src); err == nil {
+				_ = os.WriteFile(dst, data, 0o600)
+			}
+		}
+	}
+}
+
+func (m *Manager) seedDefaults() {
+	exeDir := ""
+	if exe, err := os.Executable(); err == nil {
+		exeDir = filepath.Dir(exe)
+	}
+	geoDir := filepath.Join(filepath.Dir(m.path), "geo")
+	_ = os.MkdirAll(geoDir, 0o700)
+
+	stateDirty := false
+	for index, source := range m.state.Sources {
+		targetFile := m.cachePath(source.ID)
+		baseName := strings.TrimPrefix(source.ID, "sagernet-") + ".srs"
+
+		if _, err := os.Stat(targetFile); os.IsNotExist(err) {
+			var seeded []byte
+			if exeDir != "" {
+				candidates := []string{
+					filepath.Join(exeDir, "geo", source.ID+".srs"),
+					filepath.Join(exeDir, "geo", baseName),
+					filepath.Join(exeDir, "resources", "geo", source.ID+".srs"),
+					filepath.Join(exeDir, "resources", "geo", baseName),
+				}
+				for _, candidate := range candidates {
+					if data, err := os.ReadFile(candidate); err == nil && len(data) >= 3 && string(data[:3]) == "SRS" {
+						seeded = data
+						break
+					}
+				}
+			}
+			if len(seeded) == 0 {
+				for _, name := range []string{"embedded/" + baseName, "embedded/" + source.ID + ".srs"} {
+					if data, err := embeddedRules.ReadFile(name); err == nil && len(data) >= 3 && string(data[:3]) == "SRS" {
+						seeded = data
+						break
+					}
+				}
+			}
+			if len(seeded) > 0 {
+				_ = replaceFileFromBytes(seeded, targetFile)
+			}
+		}
+
+		if data, err := os.ReadFile(targetFile); err == nil && len(data) >= 3 && string(data[:3]) == "SRS" {
+			digest := sha256.Sum256(data)
+			actual := hex.EncodeToString(digest[:])
+			if source.AppliedSHA256 == "" || source.Size == 0 {
+				source.AppliedSHA256 = actual
+				source.Size = int64(len(data))
+				if source.UpdatedAt.IsZero() {
+					source.UpdatedAt = time.Now().UTC()
+				}
+				m.state.Sources[index] = source
+				stateDirty = true
+			}
+		}
+	}
+	if stateDirty {
+		_ = m.save(m.state)
+	}
+}
+
+func replaceFileFromBytes(data []byte, target string) error {
+	dir := filepath.Dir(target)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	f, err := os.CreateTemp(dir, ".srs-seed-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpName := f.Name()
+	defer os.Remove(tmpName)
+	if _, err := f.Write(data); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	return replaceFile(tmpName, target)
 }
 
 func (m *Manager) save(next state) error {

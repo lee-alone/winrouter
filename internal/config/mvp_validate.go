@@ -226,7 +226,7 @@ func ValidateMVPWithCore(ctx context.Context, input MVPConfig, executable string
 	}
 	report.SchemaValid = true
 	report.SemanticValid = true
-	coreResult, err := core.Validate(ctx, executable, core.LockedVersion, core.LockedSHA256, generated.JSON)
+	coreResult, err := core.ValidateCore(ctx, executable, generated.JSON)
 	if err != nil {
 		return Generated{}, report, &ValidationError{Stage: StageCore, Err: err}
 	}

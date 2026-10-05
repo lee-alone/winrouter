@@ -399,6 +399,27 @@ export namespace config {
 
 }
 
+export namespace configdir {
+	
+	export class Info {
+	    path: string;
+	    is_portable: boolean;
+	    migrated: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new Info(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.path = source["path"];
+	        this.is_portable = source["is_portable"];
+	        this.migrated = source["migrated"];
+	    }
+	}
+
+}
+
 export namespace core {
 	
 	export class Status {
@@ -1244,6 +1265,20 @@ export namespace nodes {
 		    return a;
 		}
 	}
+	export class SecurityStatus {
+	    pin_enabled: boolean;
+	    unlocked: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new SecurityStatus(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.pin_enabled = source["pin_enabled"];
+	        this.unlocked = source["unlocked"];
+	    }
+	}
 	
 	
 	export class TestResult {
@@ -1659,6 +1694,7 @@ export namespace rulesettings {
 	    schema_version: number;
 	    initialized: boolean;
 	    default_outbound: string;
+	    rule_update_outbound?: string;
 	    rules: Rule[];
 	    rule_order: string[];
 	
@@ -1671,6 +1707,7 @@ export namespace rulesettings {
 	        this.schema_version = source["schema_version"];
 	        this.initialized = source["initialized"];
 	        this.default_outbound = source["default_outbound"];
+	        this.rule_update_outbound = source["rule_update_outbound"];
 	        this.rules = this.convertValues(source["rules"], Rule);
 	        this.rule_order = source["rule_order"];
 	    }

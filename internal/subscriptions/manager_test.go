@@ -67,11 +67,11 @@ func TestValidateSubscriptionURL(t *testing.T) {
 		}
 	}
 	for _, value := range []string{
-		"http://example.com/nodes.json",            // public HTTP not allowed
-		"http://8.8.8.8/nodes.json",                 // public IP over HTTP not allowed
-		"http://169.254.169.254/meta-data",         // link-local / cloud metadata over HTTP
-		"https://169.254.169.254/meta-data",        // link-local / cloud metadata over HTTPS
-		"ftp://192.168.1.50/nodes.json",            // unsupported scheme
+		"http://example.com/nodes.json",                // public HTTP not allowed
+		"http://8.8.8.8/nodes.json",                    // public IP over HTTP not allowed
+		"http://169.254.169.254/meta-data",             // link-local / cloud metadata over HTTP
+		"https://169.254.169.254/meta-data",            // link-local / cloud metadata over HTTPS
+		"ftp://192.168.1.50/nodes.json",                // unsupported scheme
 		"http://user:password@192.168.1.50/nodes.json", // userinfo not allowed
 		"http:///nodes.json",
 		"invalid-url",

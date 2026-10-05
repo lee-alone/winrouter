@@ -95,9 +95,7 @@ func (m *Manager) Refresh() (Snapshot, error) {
 		updated := m.state
 		updated.TUNPrefix = snapshot.TUN.Prefix
 		if m.options.StatePath != "" {
-			if err := SaveState(m.options.StatePath, updated); err != nil {
-				return Snapshot{}, err
-			}
+			_ = SaveState(m.options.StatePath, updated)
 		}
 		m.state = updated
 	}

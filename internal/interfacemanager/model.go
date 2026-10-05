@@ -46,11 +46,11 @@ type ResolvedSelection struct {
 }
 
 type Snapshot struct {
-	Sequence    uint64                `json:"sequence"`
-	Candidates  []Candidate           `json:"candidates"`
-	Adapters    []interfaces.Adapter  `json:"adapters"`
-	Routes      []routes.Route        `json:"routes"`
-	Topology    interfaces.Topology   `json:"topology"`
+	Sequence      uint64                `json:"sequence"`
+	Candidates    []Candidate           `json:"candidates"`
+	Adapters      []interfaces.Adapter  `json:"adapters"`
+	Routes        []routes.Route        `json:"routes"`
+	Topology      interfaces.Topology   `json:"topology"`
 	InterfaceA    ResolvedSelection     `json:"interface_a"`
 	InterfaceB    ResolvedSelection     `json:"interface_b"`
 	TUN           *tunprefix.Allocation `json:"tun,omitempty"`

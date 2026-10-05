@@ -14,7 +14,9 @@ try {
     go build -o (Join-Path $output 'WinRouter-core-smoke.exe') .\cmd\winrouter-core-smoke
     if ($LASTEXITCODE -ne 0) { throw "core smoke build failed ($LASTEXITCODE)" }
     New-Item -ItemType Directory -Force -Path (Join-Path $output 'resources\core') | Out-Null
-    Copy-Item -LiteralPath 'resources\core\sing-box.exe','resources\core\manifest.json','resources\core\LICENSE' -Destination (Join-Path $output 'resources\core') -Force
+    if (Test-Path 'resources\core') {
+        Get-ChildItem -LiteralPath 'resources\core' -File | Copy-Item -Destination (Join-Path $output 'resources\core') -Force
+    }
 } finally {
     Pop-Location
 }

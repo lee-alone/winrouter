@@ -41,7 +41,7 @@ func New(path string, protector nodes.Protector, nodeStore *nodes.Store) (*Manag
 	}
 	manager := &Manager{
 		path: path, protector: protector, nodes: nodeStore,
-		state: state{SchemaVersion: SchemaVersion, Subscriptions: []storedSubscription{}},
+		state:  state{SchemaVersion: SchemaVersion, Subscriptions: []storedSubscription{}},
 		client: createSubscriptionHTTPClient(),
 	}
 	data, err := os.ReadFile(path)

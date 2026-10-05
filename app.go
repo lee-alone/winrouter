@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/http"
 	"net/netip"
 	"os"
 	"path/filepath"
@@ -22,6 +23,7 @@ import (
 	"winrouter/internal/buildinfo"
 	"winrouter/internal/clashapi"
 	"winrouter/internal/config"
+	"winrouter/internal/configdir"
 	"winrouter/internal/core"
 	"winrouter/internal/dnssettings"
 	"winrouter/internal/helperclient"
@@ -65,6 +67,9 @@ type App struct {
 	windowVisible         atomic.Bool
 	connectionObservation atomic.Bool
 	connectionAPISecret   string
+	configInfo            configdir.Info
+	protector             *nodes.PortableProtector
+	detectedCoreVer       string
 }
 
 type ApplicationStatus struct {
@@ -157,12 +162,28 @@ func (a *App) BeforeClose(ctx context.Context) bool {
 func (a *App) Startup(ctx context.Context) {
 	a.ctx = ctx
 	a.observations.Log(observability.LevelInfo, "application", "WinRouter started", "", nil)
-	configDirectory, err := os.UserConfigDir()
+	info, err := configdir.Resolve()
 	if err != nil {
-		a.setInterfaceError(fmt.Errorf("locate user configuration: %w", err))
+		a.setInterfaceError(fmt.Errorf("locate configuration directory: %w", err))
 		return
 	}
-	nodeStore, nodeErr := nodes.New(filepath.Join(configDirectory, "WinRouter", "nodes.json"), nodes.DPAPIProtector{})
+	a.mu.Lock()
+	a.configInfo = info
+	a.mu.Unlock()
+	configDirectory := info.Path
+	if info.Migrated {
+		a.observations.Log(observability.LevelInfo, "application", "Migrated existing configuration to portable directory", "", map[string]any{"path": configDirectory})
+	}
+
+	protector, protectorErr := nodes.NewPortableProtector(configDirectory, nodes.DPAPIProtector{})
+	a.mu.Lock()
+	a.protector = protector
+	a.mu.Unlock()
+	if protectorErr != nil {
+		a.observations.Log(observability.LevelError, "security", "Failed to initialize portable protector", newCorrelationID(), map[string]any{"error": protectorErr.Error()})
+	}
+
+	nodeStore, nodeErr := nodes.New(filepath.Join(configDirectory, "nodes.json"), protector)
 	a.mu.Lock()
 	a.nodeStore = nodeStore
 	a.nodeError = nodeErr
@@ -171,7 +192,7 @@ func (a *App) Startup(ctx context.Context) {
 		a.observations.Log(observability.LevelError, "proxy", "Proxy node store failed to load", newCorrelationID(), map[string]any{"error": nodeErr.Error()})
 	}
 	if nodeErr == nil {
-		subscriptionManager, subscriptionErr := subscriptions.New(filepath.Join(configDirectory, "WinRouter", "subscriptions.json"), nodes.DPAPIProtector{}, nodeStore)
+		subscriptionManager, subscriptionErr := subscriptions.New(filepath.Join(configDirectory, "subscriptions.json"), protector, nodeStore)
 		a.mu.Lock()
 		a.subscriptions = subscriptionManager
 		a.subscriptionError = subscriptionErr
@@ -180,7 +201,7 @@ func (a *App) Startup(ctx context.Context) {
 			a.observations.Log(observability.LevelError, "proxy", "Subscription store failed to load", newCorrelationID(), map[string]any{"error": subscriptionErr.Error()})
 		}
 	}
-	ruleSettingsManager, ruleSettingsErr := rulesettings.New(filepath.Join(configDirectory, "WinRouter", "rule-settings.json"))
+	ruleSettingsManager, ruleSettingsErr := rulesettings.New(filepath.Join(configDirectory, "rule-settings.json"))
 	a.mu.Lock()
 	a.ruleSettings, a.ruleSettingsError = ruleSettingsManager, ruleSettingsErr
 	a.mu.Unlock()
@@ -188,12 +209,19 @@ func (a *App) Startup(ctx context.Context) {
 		a.observations.Log(observability.LevelError, "rules", "Rule settings store failed to load", newCorrelationID(), map[string]any{"error": ruleSettingsErr.Error()})
 	}
 	srsPath, srsPathErr := locateBundledCore()
+	if srsPath != "" {
+		if ver, err := core.DetectCoreVersion(ctx, srsPath); err == nil && ver != "" {
+			a.mu.Lock()
+			a.detectedCoreVer = ver
+			a.mu.Unlock()
+		}
+	}
 	var srsManager *srssets.Manager
 	var srsErr error
 	if srsPathErr != nil {
 		srsErr = srsPathErr
 	} else {
-		srsManager, srsErr = srssets.New(filepath.Join(configDirectory, "WinRouter", "srs-sources.json"), srsPath)
+		srsManager, srsErr = srssets.New(filepath.Join(configDirectory, "srs-sources.json"), srsPath)
 	}
 	a.mu.Lock()
 	a.srsSets, a.srsSetError = srsManager, srsErr
@@ -203,7 +231,7 @@ func (a *App) Startup(ctx context.Context) {
 	} else {
 		a.syncAllRuleSetMetadata()
 	}
-	budgetManager, budgetErr := trafficbudget.New(filepath.Join(configDirectory, "WinRouter", "traffic-budget.json"))
+	budgetManager, budgetErr := trafficbudget.New(filepath.Join(configDirectory, "traffic-budget.json"))
 	a.mu.Lock()
 	a.trafficBudget = budgetManager
 	a.trafficBudgetError = budgetErr
@@ -211,17 +239,20 @@ func (a *App) Startup(ctx context.Context) {
 	if budgetErr != nil {
 		a.observations.Log(observability.LevelError, "traffic-budget", "Traffic budget store failed to load", newCorrelationID(), map[string]any{"error": budgetErr.Error()})
 	}
-	dnsManager, dnsErr := dnssettings.New(filepath.Join(configDirectory, "WinRouter", "dns-settings.json"))
+	dnsManager, dnsErr := dnssettings.New(filepath.Join(configDirectory, "dns-settings.json"))
 	a.mu.Lock()
 	a.dnsSettings, a.dnsSettingsError = dnsManager, dnsErr
 	a.mu.Unlock()
 	if dnsErr != nil {
 		a.observations.Log(observability.LevelError, "dns", "DNS settings store failed to load", newCorrelationID(), map[string]any{"error": dnsErr.Error()})
 	}
-	manager, err := interfacemanager.New(interfacemanager.Options{StatePath: filepath.Join(configDirectory, "WinRouter", "interfaces.json")})
+	manager, err := interfacemanager.New(interfacemanager.Options{StatePath: filepath.Join(configDirectory, "interfaces.json")})
 	if err != nil {
 		a.setInterfaceError(err)
 		return
+	}
+	if _, err := manager.Refresh(); err != nil {
+		a.observations.Log(observability.LevelWarning, "interfaces", "Initial interface refresh warning", "", map[string]any{"error": err.Error()})
 	}
 	a.mu.Lock()
 	a.interfaceManager = manager
@@ -274,15 +305,89 @@ func (a *App) Startup(ctx context.Context) {
 	go a.monitorCoreRuntime(ctx)
 }
 func (a *App) GetStatus() ApplicationStatus {
-	return ApplicationStatus{Name: "WinRouter", Version: buildinfo.Version, Commit: buildinfo.Commit, CoreVersion: buildinfo.CoreVersion, Ready: false}
+	a.mu.RLock()
+	coreVer := a.detectedCoreVer
+	a.mu.RUnlock()
+	if coreVer == "" {
+		coreVer = buildinfo.CoreVersion
+	}
+	return ApplicationStatus{Name: "WinRouter", Version: buildinfo.Version, Commit: buildinfo.Commit, CoreVersion: coreVer, Ready: false}
 }
 
 func (a *App) GetApplicationConfigDirectory() string {
-	configRoot, err := os.UserConfigDir()
-	if err != nil {
-		return ""
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	if a.configInfo.Path != "" {
+		return a.configInfo.Path
 	}
-	return filepath.Join(configRoot, "WinRouter")
+	info, err := configdir.Resolve()
+	if err == nil {
+		return info.Path
+	}
+	return ""
+}
+
+func (a *App) GetApplicationConfigInfo() configdir.Info {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	if a.configInfo.Path != "" {
+		return a.configInfo
+	}
+	info, err := configdir.Resolve()
+	if err == nil {
+		return info
+	}
+	return configdir.Info{}
+}
+
+func (a *App) GetSecurityStatus() nodes.SecurityStatus {
+	a.mu.RLock()
+	p := a.protector
+	a.mu.RUnlock()
+	if p == nil {
+		return nodes.SecurityStatus{PINEnabled: false, Unlocked: true}
+	}
+	return p.Status()
+}
+
+func (a *App) UnlockSecurityVault(pin string) error {
+	a.mu.RLock()
+	p := a.protector
+	a.mu.RUnlock()
+	if p == nil {
+		return errors.New("security vault not initialized")
+	}
+	return p.UnlockWithPIN(pin)
+}
+
+func (a *App) EnableSecurityPIN(pin string) error {
+	a.mu.RLock()
+	p := a.protector
+	a.mu.RUnlock()
+	if p == nil {
+		return errors.New("security vault not initialized")
+	}
+	return p.EnablePIN(pin)
+}
+
+func (a *App) ChangeSecurityPIN(oldPIN, newPIN string) error {
+	a.mu.RLock()
+	p := a.protector
+	a.mu.RUnlock()
+	if p == nil {
+		return errors.New("security vault not initialized")
+	}
+	return p.ChangePIN(oldPIN, newPIN)
+}
+
+func (a *App) DisableSecurityPIN(pin string) error {
+	a.mu.RLock()
+	p := a.protector
+	a.mu.RUnlock()
+	if p == nil {
+		return errors.New("security vault not initialized")
+	}
+	return p.DisablePIN(pin)
 }
 
 func (a *App) GetAutostartStatus() (autostart.Status, error) { return autostart.Get() }
@@ -611,36 +716,44 @@ func (a *App) withSelectedProxy(input config.MVPConfig) (config.MVPConfig, error
 		if egress == nodes.EgressA {
 			dnsServer = input.DNS.Domestic
 		}
-		if dnsServer.Type != "udp" || dnsServer.Port != 53 {
-			return config.MVPConfig{}, errors.New("proxy domain bootstrap currently requires fixed UDP DNS on port 53")
-		}
-		dnsAddr, err := netip.ParseAddr(dnsServer.Server)
-		if err != nil {
-			return config.MVPConfig{}, fmt.Errorf("invalid DNS server address %q: %w", dnsServer.Server, err)
-		}
-		var source string
-		var sourceErr error
-		if dnsAddr.Is6() {
-			if egress == nodes.EgressA {
-				source, sourceErr = a.interfaceASourceIPv6()
-			} else {
-				source, sourceErr = a.interfaceBSourceIPv6()
+		var res string
+		var resolveErr error
+		if dnsServer.Type == "udp" && dnsServer.Port == 53 {
+			dnsAddr, err := netip.ParseAddr(dnsServer.Server)
+			if err == nil {
+				var source string
+				if dnsAddr.Is6() {
+					if egress == nodes.EgressA {
+						source, _ = a.interfaceASourceIPv6()
+					} else {
+						source, _ = a.interfaceBSourceIPv6()
+					}
+				} else {
+					if egress == nodes.EgressA {
+						source, _ = a.interfaceASourceIPv4()
+					} else {
+						source, _ = a.interfaceBSourceIPv4()
+					}
+				}
+				dnsCtx, dnsCancel := context.WithTimeout(a.ctx, 8*time.Second)
+				res, resolveErr = nodes.ResolveEndpoint(dnsCtx, node.Server, dnsServer.Server, source)
+				dnsCancel()
 			}
-		} else {
-			if egress == nodes.EgressA {
-				source, sourceErr = a.interfaceASourceIPv4()
-			} else {
-				source, sourceErr = a.interfaceBSourceIPv4()
+		}
+		// If custom UDP 53 resolution failed or DNS type was DoH/DoT, fallback to system resolver
+		if res == "" {
+			sysCtx, sysCancel := context.WithTimeout(a.ctx, 8*time.Second)
+			ips, sysErr := net.DefaultResolver.LookupIP(sysCtx, "ip", node.Server)
+			sysCancel()
+			if sysErr == nil && len(ips) > 0 {
+				res = ips[0].String()
+				resolveErr = nil
 			}
 		}
-		if sourceErr != nil {
-			return config.MVPConfig{}, sourceErr
-		}
-		dnsCtx, dnsCancel := context.WithTimeout(a.ctx, 8*time.Second)
-		defer dnsCancel()
-		res, resolveErr := nodes.ResolveEndpoint(dnsCtx, node.Server, dnsServer.Server, source)
-		if resolveErr != nil {
+		if res == "" && resolveErr != nil {
 			return config.MVPConfig{}, fmt.Errorf("proxy DNS via interface %s: %w", strings.ToUpper(egress), resolveErr)
+		} else if res == "" {
+			return config.MVPConfig{}, fmt.Errorf("failed to resolve proxy domain %q", node.Server)
 		}
 		resolved = res
 		server = resolved
@@ -672,7 +785,7 @@ func (a *App) withSelectedProxy(input config.MVPConfig) (config.MVPConfig, error
 		SourceIP:      source,
 	})
 	if !probe.Available {
-		return config.MVPConfig{}, fmt.Errorf("proxy endpoint failed health check: %s (%s)", probe.Error, probe.ErrorCategory)
+		a.observations.Log(observability.LevelWarning, "proxy", "Selected proxy endpoint failed health check, proceeding with warning", "", map[string]any{"error": probe.Error, "category": probe.ErrorCategory, "server": server})
 	}
 
 	if resolved != "" {
@@ -1214,11 +1327,57 @@ func (a *App) RefreshSRSSource(id string) (srssets.Source, error) {
 	if err != nil {
 		return srssets.Source{}, err
 	}
-	ctx, cancel := context.WithTimeout(a.ctx, 30*time.Second)
+	ctx, cancel := context.WithTimeout(a.ctx, 35*time.Second)
 	defer cancel()
-	updated, err := manager.Update(ctx, id)
+	client := a.ruleUpdateHTTPClient()
+	updated, err := manager.UpdateWithClient(ctx, id, client)
 	a.syncAllRuleSetMetadata()
 	return updated, err
+}
+
+func (a *App) ruleUpdateHTTPClient() *http.Client {
+	outbound := "auto"
+	a.mu.RLock()
+	rs := a.ruleSettings
+	a.mu.RUnlock()
+	if rs != nil {
+		settings := rs.Get()
+		if settings.RuleUpdateOutbound != "" {
+			outbound = settings.RuleUpdateOutbound
+		}
+	}
+	baseTransport := &http.Transport{
+		Proxy:               http.ProxyFromEnvironment,
+		TLSHandshakeTimeout: 10 * time.Second,
+	}
+	switch outbound {
+	case "a":
+		if src, err := a.interfaceASourceIPv4(); err == nil && src != "" {
+			dialer := &net.Dialer{
+				LocalAddr: &net.TCPAddr{IP: net.ParseIP(src)},
+				Timeout:   15 * time.Second,
+			}
+			baseTransport.DialContext = dialer.DialContext
+		}
+	case "b":
+		if src, err := a.interfaceBSourceIPv4(); err == nil && src != "" {
+			dialer := &net.Dialer{
+				LocalAddr: &net.TCPAddr{IP: net.ParseIP(src)},
+				Timeout:   15 * time.Second,
+			}
+			baseTransport.DialContext = dialer.DialContext
+		}
+	}
+	return &http.Client{
+		Transport: baseTransport,
+		Timeout:   30 * time.Second,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 5 {
+				return errors.New("stopped after 5 redirects")
+			}
+			return nil
+		},
+	}
 }
 
 func (a *App) DeleteSRSSource(id string) error {
@@ -1346,11 +1505,10 @@ func (a *App) ResetApplicationSettings() (string, error) {
 	if _, err := a.StopCore(); err != nil {
 		return "", fmt.Errorf("stop routing core: %w", err)
 	}
-	configRoot, err := os.UserConfigDir()
-	if err != nil {
-		return "", fmt.Errorf("locate user configuration: %w", err)
+	configDir := a.GetApplicationConfigDirectory()
+	if configDir == "" {
+		return "", errors.New("cannot determine application configuration directory")
 	}
-	configDir := filepath.Join(configRoot, "WinRouter")
 	backupDir, err := backupApplicationSettings(configDir, []string{"interfaces.json", "rule-settings.json", "dns-settings.json"})
 	if err != nil {
 		return "", err
@@ -1389,11 +1547,10 @@ func (a *App) RepairApplicationSettings() (string, error) {
 	if _, err := a.StopCore(); err != nil {
 		return "", fmt.Errorf("stop routing core: %w", err)
 	}
-	configRoot, err := os.UserConfigDir()
-	if err != nil {
-		return "", fmt.Errorf("locate user configuration: %w", err)
+	configDir := a.GetApplicationConfigDirectory()
+	if configDir == "" {
+		return "", errors.New("cannot determine application configuration directory")
 	}
-	configDir := filepath.Join(configRoot, "WinRouter")
 	backupDir, err := backupApplicationSettings(configDir, []string{"interfaces.json", "rule-settings.json", "dns-settings.json"})
 	if err != nil {
 		return "", err
@@ -1761,24 +1918,7 @@ func (a *App) dnsDiagnosticStatus(coreStatus core.Status) []observability.DNSSta
 func newCorrelationID() string { return fmt.Sprintf("WR-%X", time.Now().UnixNano()) }
 
 func locateBundledCore() (string, error) {
-	executable, err := os.Executable()
-	if err != nil {
-		return "", err
-	}
-	candidates := []string{
-		filepath.Join(filepath.Dir(executable), "resources", "core", "sing-box.exe"),
-		filepath.Join("resources", "core", "sing-box.exe"),
-	}
-	for _, candidate := range candidates {
-		absolute, err := filepath.Abs(candidate)
-		if err != nil {
-			continue
-		}
-		if info, err := os.Stat(absolute); err == nil && !info.IsDir() {
-			return absolute, nil
-		}
-	}
-	return "", errors.New("locate bundled sing-box for SRS validation")
+	return core.Locate()
 }
 
 func (a *App) GetCoreStatus() (core.Status, error) {

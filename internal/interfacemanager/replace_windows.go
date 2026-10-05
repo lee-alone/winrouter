@@ -2,7 +2,11 @@
 
 package interfacemanager
 
-import "golang.org/x/sys/windows"
+import (
+	"time"
+
+	"golang.org/x/sys/windows"
+)
 
 func replaceStateFile(source, destination string) error {
 	sourcePtr, err := windows.UTF16PtrFromString(source)
@@ -13,5 +17,13 @@ func replaceStateFile(source, destination string) error {
 	if err != nil {
 		return err
 	}
-	return windows.MoveFileEx(sourcePtr, destinationPtr, windows.MOVEFILE_REPLACE_EXISTING|windows.MOVEFILE_WRITE_THROUGH)
+	var lastErr error
+	for attempt := 0; attempt < 5; attempt++ {
+		lastErr = windows.MoveFileEx(sourcePtr, destinationPtr, windows.MOVEFILE_REPLACE_EXISTING|windows.MOVEFILE_WRITE_THROUGH)
+		if lastErr == nil {
+			return nil
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	return lastErr
 }

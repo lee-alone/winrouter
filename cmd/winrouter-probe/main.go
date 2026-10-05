@@ -156,9 +156,9 @@ func main() {
 				input := config.MVPConfig{
 					SchemaVersion: config.SchemaVersion1,
 					TUN:           config.MVPTUN{Prefix: allocation.Prefix, Stack: *stack},
-					InterfaceA: config.MVPInterface{GUID: candidates[0].GUID, BindInterface: candidates[0].FriendlyName},
-					InterfaceB: config.MVPInterface{GUID: candidates[1].GUID, BindInterface: candidates[1].FriendlyName},
-					Domestic:   config.MVPDomestic{CIDRs: []string{"223.5.5.5/32"}, DomainSuffixes: []string{"baidu.com"}},
+					InterfaceA:    config.MVPInterface{GUID: candidates[0].GUID, BindInterface: candidates[0].FriendlyName},
+					InterfaceB:    config.MVPInterface{GUID: candidates[1].GUID, BindInterface: candidates[1].FriendlyName},
+					Domestic:      config.MVPDomestic{CIDRs: []string{"223.5.5.5/32"}, DomainSuffixes: []string{"baidu.com"}},
 					DNS: config.MVPDNS{
 						Domestic: config.MVPDNSServer{Type: "udp", Server: "223.5.5.5", Port: 53},
 						Global:   config.MVPDNSServer{Type: "udp", Server: "8.8.8.8", Port: 53},
@@ -387,7 +387,7 @@ func main() {
 			} else if *checkTUN {
 				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 				defer cancel()
-				validation, err := core.Validate(ctx, *corePath, core.LockedVersion, core.LockedSHA256, generated)
+				validation, err := core.ValidateCore(ctx, *corePath, generated)
 				if err != nil {
 					fmt.Fprintf(os.Stderr, "validate minimal TUN config: %v\n", err)
 					os.Exit(1)

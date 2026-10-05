@@ -16,13 +16,24 @@ try {
     go build -ldflags $flags -o build\bin\WinRouter-core-smoke.exe .\cmd\winrouter-core-smoke
     if ($LASTEXITCODE -ne 0) { throw "core smoke build failed ($LASTEXITCODE)" }
     New-Item -ItemType Directory -Force -Path 'build\bin\resources\core' | Out-Null
-    Copy-Item -LiteralPath 'resources\core\sing-box.exe','resources\core\manifest.json','resources\core\LICENSE' -Destination 'build\bin\resources\core' -Force
+    if (Test-Path 'resources\core') {
+        Get-ChildItem -LiteralPath 'resources\core' -File | Copy-Item -Destination 'build\bin\resources\core' -Force
+    }
+    New-Item -ItemType Directory -Force -Path 'build\bin\resources\geo' | Out-Null
+    if (Test-Path 'resources\geo') {
+        Get-ChildItem -LiteralPath 'resources\geo' -File | Copy-Item -Destination 'build\bin\resources\geo' -Force
+    }
     New-Item -ItemType Directory -Force -Path 'build\metadata' | Out-Null
+    $coreVersion = if (Test-Path 'resources\core\sing-box.exe') {
+        try {
+            ((& 'resources\core\sing-box.exe' version | Select-Object -First 1) -replace '^sing-box version\s*', '').Trim()
+        } catch { 'unknown' }
+    } else { 'unknown' }
     [ordered]@{
         version = $Version; commit = $commit; build_time = $buildTime
         go = (go version); node = (node --version)
         wails = ((wails version | Select-Object -First 1) -replace '\x1b\[[0-9;]*m', '')
-        sing_box = '1.13.15'
+        sing_box = $coreVersion
     } | ConvertTo-Json | Set-Content -LiteralPath 'build\metadata\build.json' -Encoding UTF8
     go list -m -json all | Set-Content -LiteralPath 'build\metadata\go-modules.jsonl' -Encoding UTF8
     npm.cmd --prefix frontend ls --all --json | Set-Content -LiteralPath 'build\metadata\npm-dependencies.json' -Encoding UTF8

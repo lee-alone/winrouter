@@ -84,7 +84,7 @@ type Node struct {
 	TLS            *TLSNode           `json:"tls,omitempty"`
 	Transport      *TransportNode     `json:"transport,omitempty"`
 	HasSecret      bool               `json:"has_secret"`
-	HasPassword    bool               `json:"has_password"` // Legacy compatibility
+	HasPassword    bool               `json:"has_password"`       // Legacy compatibility
 	Username       string             `json:"username,omitempty"` // Legacy compatibility
 	Selected       bool               `json:"selected"`
 	SubscriptionID string             `json:"subscription_id,omitempty"`

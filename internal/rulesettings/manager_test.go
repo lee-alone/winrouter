@@ -128,3 +128,45 @@ func TestConfigureNormalizesIPv6Rules(t *testing.T) {
 		t.Fatalf("unexpected normalized values: %#v", stored.Rules[0].Values)
 	}
 }
+
+func TestDefaultsIncludePrivateLANAndRuleUpdateOutbound(t *testing.T) {
+	d := Defaults()
+	if d.RuleUpdateOutbound != "auto" {
+		t.Fatalf("default RuleUpdateOutbound = %q, want auto", d.RuleUpdateOutbound)
+	}
+	if len(d.Rules) == 0 || d.Rules[0].ID != "default-private-lan" {
+		t.Fatalf("defaults must include default-private-lan rule, got %#v", d.Rules)
+	}
+	if d.Rules[0].Action != "a" || len(d.Rules[0].Values) != 2 {
+		t.Fatalf("default private lan rule action/values = %#v", d.Rules[0])
+	}
+	m, err := New(filepath.Join(t.TempDir(), "rules.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := m.Get()
+	if len(got.Rules) == 0 || got.Rules[0].ID != "default-private-lan" {
+		t.Fatalf("new manager must initialize with default-private-lan, got %#v", got.Rules)
+	}
+}
+
+func TestRuleOrderSupportsExclamationMarkSRSKeys(t *testing.T) {
+	settings := Defaults()
+	settings.RuleOrder = []string{"srs:sagernet-geosite-geolocation-!cn", "default-private-lan"}
+	if err := Validate(settings); err != nil {
+		t.Fatalf("Validate failed for order key with exclamation mark: %v", err)
+	}
+
+	m, err := New(filepath.Join(t.TempDir(), "rules.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored, err := m.Configure(settings)
+	if err != nil {
+		t.Fatalf("Configure failed: %v", err)
+	}
+	if len(stored.RuleOrder) != 2 || stored.RuleOrder[0] != "srs:sagernet-geosite-geolocation-!cn" {
+		t.Fatalf("unexpected stored rule order: %#v", stored.RuleOrder)
+	}
+}
+

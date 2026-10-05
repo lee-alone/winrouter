@@ -15,7 +15,7 @@ import (
 
 const SchemaVersion = 2
 
-var ruleIDPattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9:_-]{0,127}$`)
+var ruleIDPattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9:_!-]{0,127}$`)
 
 type Rule struct {
 	ID      string   `json:"id"`
@@ -27,15 +27,31 @@ type Rule struct {
 }
 
 type Settings struct {
-	SchemaVersion   int      `json:"schema_version"`
-	Initialized     bool     `json:"initialized"`
-	DefaultOutbound string   `json:"default_outbound"`
-	Rules           []Rule   `json:"rules"`
-	RuleOrder       []string `json:"rule_order"`
+	SchemaVersion      int      `json:"schema_version"`
+	Initialized        bool     `json:"initialized"`
+	DefaultOutbound    string   `json:"default_outbound"`
+	RuleUpdateOutbound string   `json:"rule_update_outbound,omitempty"`
+	Rules              []Rule   `json:"rules"`
+	RuleOrder          []string `json:"rule_order"`
 }
 
 func Defaults() Settings {
-	return Settings{SchemaVersion: SchemaVersion, DefaultOutbound: "b", Rules: []Rule{}, RuleOrder: []string{}}
+	return Settings{
+		SchemaVersion:      SchemaVersion,
+		DefaultOutbound:    "b",
+		RuleUpdateOutbound: "auto",
+		Rules: []Rule{
+			{
+				ID:      "default-private-lan",
+				Name:    "常用内网地址 (局域网)",
+				Type:    "ip",
+				Values:  []string{"192.168.0.0/16", "10.110.0.0/16"},
+				Action:  "a",
+				Enabled: true,
+			},
+		},
+		RuleOrder: []string{"default-private-lan"},
+	}
 }
 
 type Manager struct {
@@ -75,6 +91,13 @@ func New(path string) (*Manager, error) {
 	if err := decoder.Decode(&stored); err != nil {
 		return nil, fmt.Errorf("decode rule settings: %w", err)
 	}
+	if stored.RuleUpdateOutbound == "" {
+		stored.RuleUpdateOutbound = "auto"
+	}
+	if len(stored.Rules) == 0 && !stored.Initialized {
+		stored.Rules = Defaults().Rules
+		stored.RuleOrder = Defaults().RuleOrder
+	}
 	if err := Validate(stored); err != nil {
 		return nil, err
 	}
@@ -97,6 +120,9 @@ func (m *Manager) Configure(value Settings) (Settings, error) {
 func (m *Manager) configureLocked(value Settings) (Settings, error) {
 	value.SchemaVersion = SchemaVersion
 	value.Initialized = true
+	if value.RuleUpdateOutbound == "" {
+		value.RuleUpdateOutbound = "auto"
+	}
 	for ruleIndex := range value.Rules {
 		for valueIndex, raw := range value.Rules[ruleIndex].Values {
 			normalized, err := normalizeValue(value.Rules[ruleIndex].Type, raw)
@@ -146,6 +172,9 @@ func Validate(value Settings) error {
 	}
 	if value.DefaultOutbound != "a" && value.DefaultOutbound != "b" && value.DefaultOutbound != "c" {
 		return errors.New("default_outbound must be a, b, or c")
+	}
+	if value.RuleUpdateOutbound != "" && value.RuleUpdateOutbound != "auto" && value.RuleUpdateOutbound != "a" && value.RuleUpdateOutbound != "b" && value.RuleUpdateOutbound != "c" {
+		return errors.New("rule_update_outbound must be auto, a, b, or c")
 	}
 	if len(value.Rules) > 200 {
 		return errors.New("rules exceed the limit of 200")

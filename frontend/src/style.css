@@ -311,3 +311,72 @@ input { width: 100%; min-height: 42px; padding: 8px 10px; border: 1px solid #aeb
 }
 @media (forced-colors: active) { .route-letter, .brand-mark { border: 1px solid ButtonText; } }
 @media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; } }
+
+.pin-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.65);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 9999;
+  backdrop-filter: blur(4px);
+}
+.pin-modal-card {
+  background: #1e1e24;
+  border: 1px solid #3a3a46;
+  border-radius: 12px;
+  width: 90%;
+  max-width: 440px;
+  padding: 24px;
+  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.5);
+}
+.pin-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 14px;
+}
+.pin-modal-header h3 {
+  margin: 0;
+  font-size: 1.15rem;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.pin-modal-desc {
+  font-size: 0.88rem;
+  color: #a0aec0;
+  line-height: 1.5;
+  margin-bottom: 18px;
+}
+.pin-input-group {
+  margin-bottom: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.pin-input-group label {
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: #cbd5e0;
+}
+.pin-input-group input {
+  padding: 10px 14px;
+  border-radius: 8px;
+  border: 1px solid #4a5568;
+  background: #121216;
+  color: #fff;
+  font-size: 1rem;
+  outline: none;
+}
+.pin-input-group input:focus {
+  border-color: #3182ce;
+}
+.pin-modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 20px;
+}

@@ -19,6 +19,8 @@ var frontendAssets embed.FS
 var trayIcon []byte
 
 func main() {
+	ensureElevated()
+
 	instanceLock, err := singleinstance.Acquire()
 	if errors.Is(err, singleinstance.ErrAlreadyRunning) {
 		return

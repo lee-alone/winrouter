@@ -125,4 +125,3 @@ func TestConflictsForPrefixIgnoresWinRouterTUN(t *testing.T) {
 		t.Fatalf("Allocate() = %#v, want 172.19.0.0/30 reused without jumping prefix", allocation)
 	}
 }
-

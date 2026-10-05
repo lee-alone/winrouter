@@ -81,11 +81,11 @@ func main() {
 	input := config.MVPConfig{
 		SchemaVersion: config.SchemaVersion1,
 		TUN:           config.MVPTUN{Prefix: allocation.Prefix, Stack: config.TUNStackSystem},
-		InterfaceA: config.MVPInterface{GUID: candidates[0].GUID, BindInterface: candidates[0].FriendlyName},
-		InterfaceB: config.MVPInterface{GUID: candidates[1].GUID, BindInterface: candidates[1].FriendlyName},
-		Domestic:   config.MVPDomestic{CIDRs: []string{"1.0.1.0/24"}, DomainSuffixes: []string{"example.cn"}},
-		DNS:        config.MVPDNS{Domestic: config.MVPDNSServer{Type: "udp", Server: "223.5.5.5", Port: 53}, Global: config.MVPDNSServer{Type: "tls", Server: "1.1.1.1", Port: 853, ServerName: "cloudflare-dns.com"}},
-		IPv6:       config.IPv6Block,
+		InterfaceA:    config.MVPInterface{GUID: candidates[0].GUID, BindInterface: candidates[0].FriendlyName},
+		InterfaceB:    config.MVPInterface{GUID: candidates[1].GUID, BindInterface: candidates[1].FriendlyName},
+		Domestic:      config.MVPDomestic{CIDRs: []string{"1.0.1.0/24"}, DomainSuffixes: []string{"example.cn"}},
+		DNS:           config.MVPDNS{Domestic: config.MVPDNSServer{Type: "udp", Server: "223.5.5.5", Port: 53}, Global: config.MVPDNSServer{Type: "tls", Server: "1.1.1.1", Port: 853, ServerName: "cloudflare-dns.com"}},
+		IPv6:          config.IPv6Block,
 	}
 	for _, prefix := range interfaces.BuildTopology(candidates[:2]).Prefixes {
 		parsed, _ := netip.ParsePrefix(prefix.Prefix)

@@ -6,6 +6,7 @@ import {config} from '../models';
 import {core} from '../models';
 import {context} from '../models';
 import {srssets} from '../models';
+import {configdir} from '../models';
 import {autostart} from '../models';
 import {dnssettings} from '../models';
 import {interfacemanager} from '../models';
@@ -26,6 +27,8 @@ export function ApplySelectedProxyConfiguration(arg1:config.MVPConfig):Promise<c
 
 export function BeforeClose(arg1:context.Context):Promise<boolean>;
 
+export function ChangeSecurityPIN(arg1:string,arg2:string):Promise<void>;
+
 export function ConfigureSRSSource(arg1:srssets.Source):Promise<srssets.Source>;
 
 export function DeleteProxyNode(arg1:string):Promise<void>;
@@ -34,9 +37,15 @@ export function DeleteSRSSource(arg1:string):Promise<void>;
 
 export function DeleteSubscription(arg1:string):Promise<void>;
 
+export function DisableSecurityPIN(arg1:string):Promise<void>;
+
+export function EnableSecurityPIN(arg1:string):Promise<void>;
+
 export function ExportDiagnosticBundle():Promise<string>;
 
 export function GetApplicationConfigDirectory():Promise<string>;
+
+export function GetApplicationConfigInfo():Promise<configdir.Info>;
 
 export function GetAutostartStatus():Promise<autostart.Status>;
 
@@ -59,6 +68,8 @@ export function GetRecoveryStatus():Promise<recovery.Status>;
 export function GetRuleSettings():Promise<rulesettings.Settings>;
 
 export function GetSRSPresets():Promise<Array<srssets.Preset>>;
+
+export function GetSecurityStatus():Promise<nodes.SecurityStatus>;
 
 export function GetStatus():Promise<main.ApplicationStatus>;
 
@@ -127,6 +138,8 @@ export function StopCore():Promise<core.Status>;
 export function TestDNSServer(arg1:dnssettings.Server):Promise<dnssettings.TestResult>;
 
 export function TestProxyNode(arg1:string,arg2:string):Promise<nodes.TestResult>;
+
+export function UnlockSecurityVault(arg1:string):Promise<void>;
 
 export function UpdateProxyNode(arg1:nodes.Input):Promise<nodes.Node>;
 

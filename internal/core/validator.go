@@ -23,7 +23,7 @@ func Validate(ctx context.Context, executable, expectedVersion, expectedSHA256 s
 	}
 	digest := sha256.Sum256(binary)
 	hash := strings.ToUpper(hex.EncodeToString(digest[:]))
-	if !strings.EqualFold(hash, expectedSHA256) {
+	if expectedSHA256 != "" && !strings.EqualFold(hash, expectedSHA256) {
 		return Validation{}, fmt.Errorf("core SHA-256 mismatch: got %s, want %s", hash, expectedSHA256)
 	}
 
@@ -31,8 +31,12 @@ func Validate(ctx context.Context, executable, expectedVersion, expectedSHA256 s
 	if err != nil {
 		return Validation{}, fmt.Errorf("query core version: %w: %s", err, strings.TrimSpace(string(versionOutput)))
 	}
-	if !strings.Contains(string(versionOutput), "sing-box version "+expectedVersion) {
-		return Validation{}, fmt.Errorf("core version mismatch: expected %s", expectedVersion)
+	versionStr := string(versionOutput)
+	if !strings.Contains(versionStr, "sing-box version") {
+		return Validation{}, fmt.Errorf("core is not a recognized sing-box executable: %s", strings.TrimSpace(versionStr))
+	}
+	if expectedVersion != "" && !strings.Contains(versionStr, "sing-box version "+expectedVersion) {
+		return Validation{}, fmt.Errorf("core version mismatch: expected %s, got %s", expectedVersion, strings.TrimSpace(versionStr))
 	}
 
 	file, err := os.CreateTemp("", "winrouter-sing-box-*.json")
@@ -61,4 +65,22 @@ func Validate(ctx context.Context, executable, expectedVersion, expectedSHA256 s
 		VersionOutput: strings.TrimSpace(string(versionOutput)), SHA256: hash,
 		CheckOutput: strings.TrimSpace(string(checkOutput)),
 	}, nil
+}
+
+// ValidateCore performs semantic and config check validation without forcing fixed version or SHA-256 constraints.
+func ValidateCore(ctx context.Context, executable string, config []byte) (Validation, error) {
+	return Validate(ctx, executable, "", "", config)
+}
+
+// DetectCoreVersion queries the core executable and returns its version string.
+func DetectCoreVersion(ctx context.Context, executable string) (string, error) {
+	versionOutput, err := exec.CommandContext(ctx, executable, "version").CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("query core version: %w: %s", err, strings.TrimSpace(string(versionOutput)))
+	}
+	lines := strings.Split(strings.TrimSpace(string(versionOutput)), "\n")
+	if len(lines) > 0 {
+		return strings.TrimSpace(lines[0]), nil
+	}
+	return "sing-box unknown", nil
 }

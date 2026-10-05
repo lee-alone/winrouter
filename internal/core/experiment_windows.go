@@ -91,7 +91,7 @@ func RunTUNExperiment(ctx context.Context, executable string, config []byte, int
 	startedAt := time.Now()
 	defer func() { report.ElapsedMillis = time.Since(startedAt).Milliseconds() }()
 
-	if _, err := Validate(ctx, executable, LockedVersion, LockedSHA256, config); err != nil {
+	if _, err := ValidateCore(ctx, executable, config); err != nil {
 		return report, err
 	}
 	file, err := os.CreateTemp("", "winrouter-tun-experiment-*.json")

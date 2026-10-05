@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, onUnmounted, ref } from 'vue'
-import { AddProxyNode, AddSubscription, ApplyCoreConfiguration, ApplySelectedProxyConfiguration, ConfigureSRSSource, DeleteProxyNode, DeleteSRSSource, DeleteSubscription, ExportDiagnosticBundle, GetApplicationConfigDirectory, GetAutostartStatus, GetConnectionObservationEnabled, GetCoreStatus, GetDNSPresets, GetDNSSettings, GetInterfaceSnapshot, GetIPv6Policy, GetObservations, GetRecoveryStatus, GetRuleSettings, GetSRSPresets, GetStatus, GetTrafficBudgetStatus, InspectProcessRules, ListProxyNodes, ListSRSSources, ListSubscriptions, PreviewCoreRules, PreviewDiagnosticBundle, RecordApplicationLog, RefreshSRSSource, RefreshSubscription, RepairApplicationSettings, ResetApplicationSettings, ResetInterfaceSelection, ResetTrafficBudget, ResetWindowsNetworkStack, RunHealthProbe, SelectInterfaces, SelectProxyNode, SetAutostartEnabled, SetConnectionObservationEnabled, SetDNSSettings, SetIPv6Policy, SetProxyNodeFavorite, SetRuleSettings, SetTrafficBudget, SpeedTestProxyNodes, StopCore, TestDNSServer, TestProxyNode, UpdateProxyNode, UpdateSubscription, ValidateCoreConfiguration, ValidateSelectedProxyConfiguration } from '../wailsjs/go/main/App'
+import { computed, onBeforeUnmount, onMounted, onUnmounted, ref, watch } from 'vue'
+import { AddProxyNode, AddSubscription, ApplyCoreConfiguration, ApplySelectedProxyConfiguration, ChangeSecurityPIN, ConfigureSRSSource, DeleteProxyNode, DeleteSRSSource, DeleteSubscription, DisableSecurityPIN, EnableSecurityPIN, ExportDiagnosticBundle, GetApplicationConfigDirectory, GetApplicationConfigInfo, GetAutostartStatus, GetConnectionObservationEnabled, GetCoreStatus, GetDNSPresets, GetDNSSettings, GetInterfaceSnapshot, GetIPv6Policy, GetObservations, GetRecoveryStatus, GetRuleSettings, GetSecurityStatus, GetSRSPresets, GetStatus, GetTrafficBudgetStatus, InspectProcessRules, ListProxyNodes, ListSRSSources, ListSubscriptions, PreviewCoreRules, PreviewDiagnosticBundle, RecordApplicationLog, RefreshSRSSource, RefreshSubscription, RepairApplicationSettings, ResetApplicationSettings, ResetInterfaceSelection, ResetTrafficBudget, ResetWindowsNetworkStack, RunHealthProbe, SelectInterfaces, SelectProxyNode, SetAutostartEnabled, SetConnectionObservationEnabled, SetDNSSettings, SetIPv6Policy, SetProxyNodeFavorite, SetRuleSettings, SetTrafficBudget, SpeedTestProxyNodes, StopCore, TestDNSServer, TestProxyNode, UnlockSecurityVault, UpdateProxyNode, UpdateSubscription, ValidateCoreConfiguration, ValidateSelectedProxyConfiguration } from '../wailsjs/go/main/App'
 import type { config, core, interfacemanager, interfaces, main, nodes, observability, processrules, rulesettings, srssets, subscriptions } from '../wailsjs/go/models'
 import { EventsOn } from '../wailsjs/runtime/runtime'
 import type { ApplicationStatus } from './vite-env'
@@ -21,6 +21,16 @@ const selectedB = ref('')
 const busy = ref(false)
 const notice = ref('')
 const error = ref('')
+const sameAdapterWarning = ref(false)
+
+watch([selectedA, selectedB], ([newA, newB]) => {
+  if (sameAdapterWarning.value && newA && newB && newA !== newB) {
+    sameAdapterWarning.value = false
+    if (error.value.includes('不能绑定相同网卡')) {
+      error.value = ''
+    }
+  }
+})
 const logFilter = ref<'all' | LogLevel>('all')
 const logs = ref<LogEntry[]>([])
 type ConnectionSummary = { active_tcp: number; established_tcp: number; listening_tcp: number; udp_endpoints: number; sampled_at?: string }
@@ -70,6 +80,64 @@ const networkResetResult = ref<main.NetworkResetResult>()
 const applicationResetBusy = ref(false)
 const initializationFailed = ref(false)
 const applicationConfigDirectory = ref('')
+const isPortableConfig = ref(false)
+const securityStatus = ref<{ pin_enabled: boolean; unlocked: boolean }>({ pin_enabled: false, unlocked: true })
+const pinModalOpen = ref(false)
+const pinModalMode = ref<'unlock' | 'enable' | 'change' | 'disable'>('unlock')
+const pinInput = ref('')
+const oldPinInput = ref('')
+const pinModalError = ref('')
+const pinModalBusy = ref(false)
+
+async function loadSecurityStatus() {
+  try {
+    const s = await GetSecurityStatus()
+    securityStatus.value = s
+  } catch {}
+}
+
+function openPinModal(mode: 'unlock' | 'enable' | 'change' | 'disable') {
+  pinModalMode.value = mode
+  pinInput.value = ''
+  oldPinInput.value = ''
+  pinModalError.value = ''
+  pinModalOpen.value = true
+}
+
+function closePinModal() {
+  pinModalOpen.value = false
+  pinInput.value = ''
+  oldPinInput.value = ''
+  pinModalError.value = ''
+}
+
+async function submitPinModal() {
+  pinModalError.value = ''
+  pinModalBusy.value = true
+  try {
+    if (pinModalMode.value === 'unlock') {
+      await UnlockSecurityVault(pinInput.value)
+      notice.value = '安全保险箱已解锁'
+    } else if (pinModalMode.value === 'enable') {
+      await EnableSecurityPIN(pinInput.value)
+      notice.value = '已启用 PIN 码安全保护'
+    } else if (pinModalMode.value === 'change') {
+      await ChangeSecurityPIN(oldPinInput.value, pinInput.value)
+      notice.value = 'PIN 码已成功修改'
+    } else if (pinModalMode.value === 'disable') {
+      await DisableSecurityPIN(pinInput.value)
+      notice.value = '已停用 PIN 码安全保护，恢复为本地便携密钥模式'
+    }
+    await loadSecurityStatus()
+    proxyNodes.value = await ListProxyNodes()
+    subscriptionList.value = await ListSubscriptions()
+    closePinModal()
+  } catch (err: any) {
+    pinModalError.value = err?.message || String(err)
+  } finally {
+    pinModalBusy.value = false
+  }
+}
 interface ProxyProtocolMeta {
   value: 'http' | 'shadowsocks' | 'vmess' | 'vless' | 'trojan'
   label: string
@@ -129,6 +197,7 @@ const proxyImportOpen = ref(false)
 const proxyImportURI = ref('')
 const proxyImportError = ref('')
 const defaultOutbound = ref<'a' | 'b' | 'c'>('b')
+const ruleUpdateOutbound = ref<'auto' | 'a' | 'b' | 'c'>('auto')
 const proxyTests = ref<Record<string, nodes.TestResult>>({})
 const testingProxyID = ref('')
 const testingAllProxies = ref(false)
@@ -180,7 +249,6 @@ const masterRows = computed<MasterRow[]>(() => {
   return rows
 })
 const hasSavedSelection = computed(() => snapshot.value?.interface_a.status === 'resolved' && snapshot.value?.interface_b.status === 'resolved')
-const selectionValid = computed(() => Boolean(selectedA.value && selectedB.value && selectedA.value !== selectedB.value && selectedAdapterA.value && selectedAdapterB.value))
 const isRunning = computed(() => coreStatus.value.state === 'running')
 const isRecovering = computed(() => ['stopping', 'waiting-for-network', 'recovering'].includes(recoveryStatus.value.state))
 const filteredLogs = computed(() => logFilter.value === 'all' ? logs.value : logs.value.filter(entry => entry.level === logFilter.value))
@@ -456,6 +524,7 @@ function saveRuleSettings(): Promise<void> {
     schema_version: 2,
     initialized: true,
     default_outbound: defaultOutbound.value,
+    rule_update_outbound: ruleUpdateOutbound.value,
     rules: customRules.value.map(rule => ({ id: rule.id, name: rule.name, type: rule.type, values: rule.values, action: rule.action, enabled: rule.enabled })),
     rule_order: [...ruleOrder.value],
   } as rulesettings.Settings
@@ -1220,10 +1289,21 @@ async function deleteSubscription(item: subscriptions.Subscription) {
 async function saveSelection() {
   error.value = ''
   notice.value = ''
-  if (!selectionValid.value) {
-    error.value = selectedA.value === selectedB.value ? '出口 A 和出口 B 不能使用同一接口。' : '请选择两块可用接口。'
+  if (!selectedA.value || !selectedB.value || !selectedAdapterA.value || !selectedAdapterB.value) {
+    const msg = '请为出口 A 和出口 B 分别选择可用的物理网卡。'
+    error.value = msg
+    window.alert(`警告：${msg}`)
     return
   }
+  if (selectedA.value === selectedB.value) {
+    sameAdapterWarning.value = true
+    const warnMsg = '出口 A 和出口 B 不能绑定相同网卡，请为两个出口分别选择不同的物理网卡。'
+    error.value = warnMsg
+    addLog('warning', `保存网卡失败：出口 A 和出口 B 绑定了相同网卡 (${selectedAdapterA.value?.friendly_name || selectedA.value})`)
+    window.alert(`警告：出口 A 和出口 B 不能绑定相同网卡！\n\n请为两个出口分别选择不同的物理网卡。`)
+    return
+  }
+  sameAdapterWarning.value = false
   const changing = hasSavedSelection.value && (snapshot.value?.interface_a.match?.adapter.guid !== selectedA.value || snapshot.value?.interface_b.match?.adapter.guid !== selectedB.value)
   if (changing && !window.confirm('更改网卡会使当前策略失效。确认保存新的出口网卡吗？')) return
   busy.value = true
@@ -1265,6 +1345,11 @@ function buildConfig(): config.MVPConfig {
 function updateDefaultOutbound(value: 'a' | 'b' | 'c') {
   defaultOutbound.value = value
   void saveRuleSettings().then(refreshRulePreview)
+}
+
+function updateRuleUpdateOutbound(value: 'auto' | 'a' | 'b' | 'c') {
+  ruleUpdateOutbound.value = value
+  void saveRuleSettings()
 }
 
 function formatRuleAction(action: RuleAction): string {
@@ -1408,6 +1493,7 @@ async function resetApplicationSettings() {
     customRules.value = Array.isArray(storedRules.rules) ? storedRules.rules as CustomRule[] : []
     ruleOrder.value = Array.isArray(storedRules.rule_order) ? [...storedRules.rule_order] : []
     defaultOutbound.value = storedRules.default_outbound as 'a' | 'b' | 'c'
+    ruleUpdateOutbound.value = (storedRules.rule_update_outbound as 'auto' | 'a' | 'b' | 'c') || 'auto'
     dnsSettings.value = normalizeDNSSettings(await GetDNSSettings() as DNSSettings)
     ipv6Policy.value = await GetIPv6Policy() as 'block' | 'split'
     coreStatus.value = { ...coreStatus.value, state: 'stopped', pid: 0 }
@@ -1476,7 +1562,21 @@ function trafficHeight(value: number, role: 'A' | 'B') {
 }
 
 onMounted(async () => {
-	try { applicationConfigDirectory.value = await GetApplicationConfigDirectory() } catch { applicationConfigDirectory.value = '' }
+	try {
+		const cfgInfo = await GetApplicationConfigInfo()
+		if (cfgInfo && cfgInfo.path) {
+			applicationConfigDirectory.value = cfgInfo.path
+			isPortableConfig.value = cfgInfo.is_portable
+		} else {
+			applicationConfigDirectory.value = await GetApplicationConfigDirectory()
+		}
+	} catch {
+		applicationConfigDirectory.value = ''
+	}
+	await loadSecurityStatus()
+	if (securityStatus.value.pin_enabled && !securityStatus.value.unlocked) {
+		openPinModal('unlock')
+	}
   try {
     const storedBaselines = JSON.parse(localStorage.getItem('winrouter.trafficBaselines.v1') || '{}')
     if (storedBaselines && typeof storedBaselines === 'object' && !Array.isArray(storedBaselines)) usageBaselines.value = storedBaselines
@@ -1498,6 +1598,7 @@ onMounted(async () => {
     customRules.value = (storedRules.initialized && Array.isArray(storedRules.rules) ? storedRules.rules : []) as CustomRule[]
     ruleOrder.value = [...(storedRules.initialized && Array.isArray(storedRules.rule_order) ? storedRules.rule_order : [])]
     defaultOutbound.value = (storedRules.initialized ? storedRules.default_outbound : 'b') as 'a' | 'b' | 'c'
+    ruleUpdateOutbound.value = (storedRules.rule_update_outbound as 'auto' | 'a' | 'b' | 'c') || 'auto'
     proxyNodes.value = await ListProxyNodes()
     subscriptionList.value = await ListSubscriptions()
     srsPresets.value = await GetSRSPresets()
@@ -1664,16 +1765,16 @@ onUnmounted(() => {
       <template v-else-if="view === 'interfaces'">
         <section class="intro"><p>{{ setupRequired ? '选择两块当前可用的物理网卡。系统会持久化接口 GUID，并在网络变化时重新核对。' : '查看当前出口，或选择其他可用网卡。修改已保存的出口前会要求确认。' }}</p></section>
         <section class="picker-grid">
-          <div class="picker"><label for="interface-a"><span class="route-letter">A</span><span><strong>出口 A</strong><small>国内与局域网</small></span></label><select id="interface-a" v-model="selectedA"><option value="" disabled>选择网卡</option><option v-for="item in candidates" :key="item.adapter.guid" :value="item.adapter.guid" :disabled="!item.eligible || item.adapter.guid === selectedB">{{ item.adapter.friendly_name }} · {{ statusText(item.adapter.status) }}</option></select></div>
-          <div class="picker"><label for="interface-b"><span class="route-letter alternate">B</span><span><strong>出口 B</strong><small>其他公网</small></span></label><select id="interface-b" v-model="selectedB"><option value="" disabled>选择网卡</option><option v-for="item in candidates" :key="item.adapter.guid" :value="item.adapter.guid" :disabled="!item.eligible || item.adapter.guid === selectedA">{{ item.adapter.friendly_name }} · {{ statusText(item.adapter.status) }}</option></select></div>
+          <div class="picker"><label for="interface-a"><span class="route-letter">A</span><span><strong>出口 A</strong><small>国内与局域网</small></span></label><select id="interface-a" v-model="selectedA"><option value="" disabled>选择网卡</option><option v-for="item in candidates" :key="item.adapter.guid" :value="item.adapter.guid" :disabled="!item.eligible">{{ item.adapter.friendly_name }} · {{ statusText(item.adapter.status) }}</option></select></div>
+          <div class="picker"><label for="interface-b"><span class="route-letter alternate">B</span><span><strong>出口 B</strong><small>其他公网</small></span></label><select id="interface-b" v-model="selectedB"><option value="" disabled>选择网卡</option><option v-for="item in candidates" :key="item.adapter.guid" :value="item.adapter.guid" :disabled="!item.eligible">{{ item.adapter.friendly_name }} · {{ statusText(item.adapter.status) }}</option></select></div>
         </section>
-        <p v-if="selectedA && selectedA === selectedB" class="field-error" role="alert">出口 A 和出口 B 不能使用同一接口。</p>
+        <p v-if="sameAdapterWarning && selectedA && selectedA === selectedB" class="field-error" role="alert">出口 A 和出口 B 不能绑定相同网卡，请为两个出口分别选择不同的物理网卡。</p>
         <section class="adapter-details" aria-label="所选网卡详情">
           <article v-for="(adapter, role) in { A: selectedAdapterA, B: selectedAdapterB }" :key="role"><h3>出口 {{ role }} · {{ adapter?.friendly_name ?? '未选择' }}</h3><dl><div><dt>连接状态</dt><dd>{{ statusText(adapter?.status ?? '未知') }}</dd></div><div><dt>地址</dt><dd>{{ adapter?.addresses?.map(a => `${a.ip}/${a.prefix_length}`).join('、') || '无' }}</dd></div><div><dt>网关</dt><dd>{{ formatList(adapter?.gateways) }}</dd></div><div><dt>DNS</dt><dd>{{ formatList(adapter?.dns_servers) }}</dd></div></dl></article>
         </section>
         <section class="policy-strip"><div><span>直连前缀</span><strong>{{ directPrefixes.map(item => item.prefix).join('、') || '选择后生成' }}</strong></div><div><span>DNS 策略</span><strong>国内经 A / 全球经 B，独立缓存</strong></div><div><span>IPv6 策略</span><strong>阻止</strong></div></section>
         <section v-if="snapshot?.diagnostics?.length" class="diagnostics" aria-label="预检诊断"><h2>预检结果</h2><div v-for="item in snapshot.diagnostics" :key="item.code" :class="['diagnostic', item.severity]"><strong>{{ item.severity === 'error' ? '错误' : '提示' }} · {{ item.code }}</strong><span>{{ item.message }}</span><small>{{ item.severity === 'error' ? '请恢复网卡连接或重新选择出口后重试。' : '保存后将按当前拓扑生成配置。' }}</small></div></section>
-        <div class="actions"><button type="button" class="secondary" @click="view = 'overview'">取消</button><button type="button" class="primary" :disabled="busy || !selectionValid" @click="saveSelection">{{ busy ? '正在保存' : '保存并继续' }}</button></div>
+        <div class="actions"><button type="button" class="secondary" @click="view = 'overview'">取消</button><button type="button" class="primary" :disabled="busy" @click="saveSelection">{{ busy ? '正在保存' : '保存并继续' }}</button></div>
       </template>
 
       <template v-else-if="view === 'rules'">
@@ -1692,6 +1793,15 @@ onUnmounted(() => {
             <option value="a">出口 A · {{ selectedAdapterA?.friendly_name ?? '未选择' }}</option>
             <option value="b">出口 B · {{ selectedAdapterB?.friendly_name ?? '未选择' }}</option>
             <option value="c">出口 C · 代理出站 ({{ proxyNodes.find(n => n.selected)?.name ?? '未配置' }})</option>
+          </select>
+        </section>
+        <section class="fallback-outbound" aria-label="规则更新出口通道">
+          <div><strong>规则更新出口通道</strong><small>拉取与更新 SRS 分流规则时使用的网络通道。</small></div>
+          <select :value="ruleUpdateOutbound" @change="updateRuleUpdateOutbound(($event.target as HTMLSelectElement).value as 'auto' | 'a' | 'b' | 'c')">
+            <option value="auto">自动选择 (代理就绪优先走代理，无代理走直连)</option>
+            <option value="c">出口 C · 代理出站 ({{ proxyNodes.find(n => n.selected)?.name ?? '未配置' }})</option>
+            <option value="b">出口 B · {{ selectedAdapterB?.friendly_name ?? '网卡 B' }}</option>
+            <option value="a">出口 A · {{ selectedAdapterA?.friendly_name ?? '网卡 A' }}</option>
           </select>
         </section>
         <section class="rules-heading">
@@ -1802,11 +1912,15 @@ onUnmounted(() => {
           <div v-for="message in proxyRiskMessages" :key="message"><strong>需要处理</strong><span>{{ message }}</span></div>
           <small>代理 endpoint 同时使用出口 B 绑定和专用 /32 规则防止再次进入代理。</small>
         </section>
+        <section v-if="securityStatus.pin_enabled && !securityStatus.unlocked" class="proxy-risks" style="border-left-color: #d69e2e;" aria-label="保险箱锁定提示">
+          <div><strong>保险箱已锁定</strong><span>节点凭据受 PIN 码安全保护，当前处于锁定状态。连接节点前请先输入 PIN 码解锁。</span></div>
+          <button type="button" class="secondary" style="margin-top: 8px;" @click="openPinModal('unlock')">输入 PIN 码解锁</button>
+        </section>
         <section class="proxy-heading">
           <div>
             <p class="section-kicker">HTTP CONNECT / Shadowsocks / VMess / VLESS / Trojan</p>
             <h2>代理节点管理</h2>
-            <p>节点凭据通过当前 Windows 用户的 DPAPI 加密，界面和日志不会读取或显示原文。</p>
+            <p>节点凭据通过 AES-256-GCM 高强度加密本地保护，支持跨设备便携移动，界面和日志不会读取或显示原文。</p>
           </div>
           <div class="proxy-heading-actions">
             <label>排序<select v-model="proxySort"><option value="favorite">收藏优先</option><option value="latency">延迟最低</option><option value="name">名称</option></select></label>
@@ -1873,7 +1987,7 @@ onUnmounted(() => {
             <div class="credential-status-header">
               <div>
                 <strong>{{ proxyForm.has_saved_secret ? '🔒 节点凭据状态：已加密保存' : '节点凭据状态：未配置凭据' }}</strong>
-                <small v-if="proxyForm.has_saved_secret">凭据通过 Windows DPAPI 本地保护，无需重复输入。</small>
+                <small v-if="proxyForm.has_saved_secret">凭据通过高强度加密本地保护，支持便携移动，无需重复输入。</small>
               </div>
               <div class="credential-controls">
                 <label v-if="proxyForm.has_saved_secret" class="toggle">
@@ -2124,12 +2238,27 @@ onUnmounted(() => {
             <label class="toggle"><input v-model="autostartEnabled" type="checkbox" :disabled="autostartBusy" @change="updateAutostart"><span>{{ t(autostartEnabled ? 'common.enabled' : 'common.disabled') }}</span></label>
           </div>
         </section>
+        <section class="settings-list" aria-label="数据安全与凭据保护">
+          <div class="setting-row">
+            <div>
+              <p class="section-kicker">安全保护</p>
+              <h2>节点凭据安全锁 (PIN 码保险箱)</h2>
+              <p>采用 AES-256-GCM 与 PBKDF2 高强度派生加密。当前状态：<strong>{{ securityStatus.pin_enabled ? (securityStatus.unlocked ? '已启用 PIN 码保护 (已解锁)' : '已锁定，需要输入 PIN 码') : '便携免密模式 (基于本地密钥，支持跨设备移动)' }}</strong></p>
+            </div>
+            <div class="proxy-actions">
+              <button v-if="securityStatus.pin_enabled && !securityStatus.unlocked" type="button" class="primary-button" @click="openPinModal('unlock')">输入 PIN 解锁</button>
+              <button v-if="!securityStatus.pin_enabled" type="button" class="secondary" @click="openPinModal('enable')">启用 PIN 码保护</button>
+              <button v-if="securityStatus.pin_enabled && securityStatus.unlocked" type="button" class="secondary" @click="openPinModal('change')">修改 PIN 码</button>
+              <button v-if="securityStatus.pin_enabled && securityStatus.unlocked" type="button" class="danger-button" @click="openPinModal('disable')">停用 PIN 保护</button>
+            </div>
+          </div>
+        </section>
         <section class="settings-list network-reset-section" aria-label="应用故障恢复">
           <div class="setting-row network-reset-setting">
-            <div><p class="section-kicker">故障恢复</p><h2>应用配置恢复</h2><p>仅重置网卡选择，或在自动备份后恢复规则、DNS、IPv6 策略和网卡选择默认值。不会删除代理节点、订阅、规则集来源，也不会修改 Windows 网络组件。</p><div class="config-directory"><span>当前用户配置目录</span><code>{{ applicationConfigDirectory || '无法确定配置目录' }}</code><small>卸载程序不会自动删除此目录；需要完整移除 WinRouter 时可手动删除。</small></div></div>
+            <div><p class="section-kicker">故障恢复</p><h2>应用配置恢复</h2><p>仅重置网卡选择，或在自动备份后恢复规则、DNS、IPv6 策略和网卡选择默认值。不会删除代理节点、订阅、规则集来源，也不会修改 Windows 网络组件。</p><div class="config-directory"><span>当前配置目录 {{ isPortableConfig ? '(便携模式)' : '(系统模式)' }}</span><code>{{ applicationConfigDirectory || '无法确定配置目录' }}</code><small>{{ isPortableConfig ? '配置文件保存在程序所在目录下的 config 文件夹中，方便整体迁移与备份。' : '当前处于受限目录，配置文件保存在系统用户配置目录中。' }}</small></div></div>
             <div class="proxy-actions"><button type="button" class="secondary" :disabled="applicationResetBusy" @click="resetSavedInterfaces">重置网卡选择</button><button type="button" class="secondary" :disabled="applicationResetBusy" @click="resetApplicationSettings">恢复应用默认设置</button><button type="button" class="danger-button" :disabled="applicationResetBusy" @click="repairApplicationSettings">{{ applicationResetBusy ? '正在处理' : '强制修复配置' }}</button></div>
           </div>
-          <div class="setting-row"><div><h2>配置文件位置</h2><p>规则、网卡选择、DNS、代理节点、订阅、缓存和恢复备份均保存在当前用户目录，不位于程序安装目录。</p></div><button type="button" class="secondary" :disabled="!applicationConfigDirectory" @click="copyApplicationConfigDirectory">复制路径</button></div>
+          <div class="setting-row"><div><h2>配置文件位置 {{ isPortableConfig ? '(程序便携目录)' : '(系统用户目录)' }}</h2><p>{{ isPortableConfig ? '规则、网卡选择、DNS、节点与备份均保存在程序同级 config 目录，支持解压即用和随时拷贝。' : '规则、网卡选择、DNS、代理节点、订阅、缓存和恢复备份均保存在当前用户目录。' }}</p></div><button type="button" class="secondary" :disabled="!applicationConfigDirectory" @click="copyApplicationConfigDirectory">复制路径</button></div>
         </section>
         <section class="settings-list network-reset-section" aria-label="高级网络修复">
           <div class="setting-row network-reset-setting">
@@ -2146,5 +2275,42 @@ onUnmounted(() => {
         </section>
       </template>
     </main>
+
+    <div v-if="pinModalOpen" class="pin-modal-backdrop" @click.self="closePinModal">
+      <div class="pin-modal-card">
+        <div class="pin-modal-header">
+          <h3>
+            <span v-if="pinModalMode === 'unlock'">🔑 解锁节点凭据保险箱</span>
+            <span v-else-if="pinModalMode === 'enable'">🛡️ 启用 PIN 码安全保护</span>
+            <span v-else-if="pinModalMode === 'change'">🔄 修改 PIN 码</span>
+            <span v-else-if="pinModalMode === 'disable'">⚠️ 停用 PIN 码保护</span>
+          </h3>
+          <button type="button" class="icon-button" @click="closePinModal">✕</button>
+        </div>
+        <div class="pin-modal-body">
+          <p class="pin-modal-desc">
+            <span v-if="pinModalMode === 'unlock'">请输入安全 PIN 码以解密代理节点和订阅信息。</span>
+            <span v-else-if="pinModalMode === 'enable'">设置变长 PIN 码（至少 4 位字符）。设置后，节点密码将由 PIN 码派生密钥高强度加密密封。</span>
+            <span v-else-if="pinModalMode === 'change'">请输入当前 PIN 码以验证身份，并输入新的安全 PIN 码。</span>
+            <span v-else-if="pinModalMode === 'disable'">输入当前 PIN 码验证后，将恢复为基于本地密钥的便携免密模式。</span>
+          </p>
+          <div v-if="pinModalMode === 'change'" class="pin-input-group">
+            <label>原 PIN 码</label>
+            <input v-model="oldPinInput" type="password" placeholder="输入原 PIN 码" autocomplete="current-password">
+          </div>
+          <div class="pin-input-group">
+            <label>{{ pinModalMode === 'change' ? '新 PIN 码' : (pinModalMode === 'disable' ? '验证当前 PIN 码' : '安全 PIN 码') }}</label>
+            <input v-model="pinInput" type="password" placeholder="请输入 PIN 码" autocomplete="new-password" @keyup.enter="submitPinModal">
+          </div>
+          <p v-if="pinModalError" class="field-error-msg" style="margin-top: 8px;">{{ pinModalError }}</p>
+        </div>
+        <div class="pin-modal-footer">
+          <button type="button" class="secondary" :disabled="pinModalBusy" @click="closePinModal">取消</button>
+          <button type="button" class="primary" :disabled="pinModalBusy || !pinInput.trim()" @click="submitPinModal">
+            {{ pinModalBusy ? '处理中...' : '确认' }}
+          </button>
+        </div>
+      </div>
+    </div>
   </div>
 </template>

@@ -22,6 +22,10 @@ export function BeforeClose(arg1) {
   return window['go']['main']['App']['BeforeClose'](arg1);
 }
 
+export function ChangeSecurityPIN(arg1, arg2) {
+  return window['go']['main']['App']['ChangeSecurityPIN'](arg1, arg2);
+}
+
 export function ConfigureSRSSource(arg1) {
   return window['go']['main']['App']['ConfigureSRSSource'](arg1);
 }
@@ -38,12 +42,24 @@ export function DeleteSubscription(arg1) {
   return window['go']['main']['App']['DeleteSubscription'](arg1);
 }
 
+export function DisableSecurityPIN(arg1) {
+  return window['go']['main']['App']['DisableSecurityPIN'](arg1);
+}
+
+export function EnableSecurityPIN(arg1) {
+  return window['go']['main']['App']['EnableSecurityPIN'](arg1);
+}
+
 export function ExportDiagnosticBundle() {
   return window['go']['main']['App']['ExportDiagnosticBundle']();
 }
 
 export function GetApplicationConfigDirectory() {
   return window['go']['main']['App']['GetApplicationConfigDirectory']();
+}
+
+export function GetApplicationConfigInfo() {
+  return window['go']['main']['App']['GetApplicationConfigInfo']();
 }
 
 export function GetAutostartStatus() {
@@ -88,6 +104,10 @@ export function GetRuleSettings() {
 
 export function GetSRSPresets() {
   return window['go']['main']['App']['GetSRSPresets']();
+}
+
+export function GetSecurityStatus() {
+  return window['go']['main']['App']['GetSecurityStatus']();
 }
 
 export function GetStatus() {
@@ -224,6 +244,10 @@ export function TestDNSServer(arg1) {
 
 export function TestProxyNode(arg1, arg2) {
   return window['go']['main']['App']['TestProxyNode'](arg1, arg2);
+}
+
+export function UnlockSecurityVault(arg1) {
+  return window['go']['main']['App']['UnlockSecurityVault'](arg1);
 }
 
 export function UpdateProxyNode(arg1) {

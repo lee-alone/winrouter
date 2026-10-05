@@ -34,11 +34,10 @@ func main() {
 		fmt.Fprintln(os.Stderr, "a high-entropy authentication token is required")
 		os.Exit(2)
 	}
-	executable, err := os.Executable()
+	corePath, err := core.Locate()
 	if err != nil {
-		fail(err)
+		fail(fmt.Errorf("locate sing-box core: %w", err))
 	}
-	corePath := filepath.Join(filepath.Dir(executable), "resources", "core", "sing-box.exe")
 	programData := os.Getenv("ProgramData")
 	if programData == "" {
 		fail(fmt.Errorf("ProgramData is not defined"))

@@ -241,4 +241,3 @@ func TestProbeIPv6HTTPConnect(t *testing.T) {
 		t.Fatal("timed out waiting for CONNECT line")
 	}
 }
-

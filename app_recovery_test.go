@@ -25,8 +25,10 @@ func TestRebuildApplicationSettingsReplacesInvalidFiles(t *testing.T) {
 	if err != nil || state.InterfaceA.GUID != "" || state.InterfaceB.GUID != "" || state.IPv6Policy != interfacemanager.IPv6PolicyBlock {
 		t.Fatalf("interface defaults = %#v, %v", state, err)
 	}
+	expectedRules := rulesettings.Defaults()
+	expectedRules.Initialized = true
 	rules, err := rulesettings.New(filepath.Join(directory, "rule-settings.json"))
-	if err != nil || rules.Get().Rules == nil || len(rules.Get().Rules) != 0 {
+	if err != nil || !reflect.DeepEqual(rules.Get(), expectedRules) {
 		t.Fatalf("rule defaults were not rebuilt: %#v, %v", rules, err)
 	}
 	dns, err := dnssettings.New(filepath.Join(directory, "dns-settings.json"))

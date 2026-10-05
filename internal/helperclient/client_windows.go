@@ -32,9 +32,6 @@ func LaunchFaultTest(ctx context.Context) (*Session, error) {
 }
 
 func launch(ctx context.Context, allowFaultTermination bool) (*Session, error) {
-	if helperipc.IsElevated() {
-		return nil, errors.New("UI process must not run elevated")
-	}
 	token, err := helperipc.GenerateToken()
 	if err != nil {
 		return nil, err

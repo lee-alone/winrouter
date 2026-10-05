@@ -15,10 +15,8 @@ Run formatting, static analysis, tests, and the desktop build with one command:
 ## Core prerequisite
 
 The repository does not track third-party core binaries. Before running core validation or a desktop build,
-download the Windows AMD64 artifact for sing-box `1.13.15` from the upstream release recorded in
-`resources/core/manifest.json`, place it at `resources/core/sing-box.exe`, and verify its SHA-256 against the
-manifest. Keep any accompanying runtime DLLs in the same directory. The upstream license and locked manifest
-remain part of this repository.
+place the Windows AMD64 artifact for sing-box at `resources/core/sing-box.exe`. Keep any accompanying runtime DLLs
+in the same directory. The upstream license remains part of this repository.
 
 ## License
 

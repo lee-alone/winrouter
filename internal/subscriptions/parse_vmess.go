@@ -11,7 +11,7 @@ import (
 )
 
 type vmessJSON struct {
-	V    any `json:"v"`
+	V    any    `json:"v"`
 	PS   string `json:"ps"`
 	Add  string `json:"add"`
 	Port any    `json:"port"`

@@ -80,8 +80,6 @@ func validateYAMLNodeTree(node *yaml.Node, currentDepth int, nodeCount, aliasCou
 	return nil
 }
 
-
-
 var allowedClashProxyKeys = map[string]bool{
 	"name":             true,
 	"type":             true,

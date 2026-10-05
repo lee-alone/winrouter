@@ -17,7 +17,9 @@ if (Test-Path -LiteralPath $zip) { Remove-Item -LiteralPath $zip -Force }
 
 New-Item -ItemType Directory -Force -Path (Join-Path $stage 'resources\core'),(Join-Path $stage 'metadata') | Out-Null
 Copy-Item -LiteralPath (Join-Path $bin 'WinRouter.exe'),(Join-Path $bin 'WinRouter-helper.exe') -Destination $stage
-Copy-Item -LiteralPath (Join-Path $bin 'resources\core\sing-box.exe'),(Join-Path $bin 'resources\core\manifest.json'),(Join-Path $bin 'resources\core\LICENSE') -Destination (Join-Path $stage 'resources\core')
+if (Test-Path (Join-Path $bin 'resources\core')) {
+    Get-ChildItem -LiteralPath (Join-Path $bin 'resources\core') -File | Copy-Item -Destination (Join-Path $stage 'resources\core') -Force
+}
 Copy-Item -LiteralPath (Join-Path $root 'docs\release\phase-1-preview.md'),(Join-Path $root 'docs\release\THIRD-PARTY-NOTICES.md') -Destination $stage
 Copy-Item -LiteralPath (Join-Path $root 'build\metadata\build.json'),(Join-Path $root 'build\metadata\go-modules.jsonl'),(Join-Path $root 'build\metadata\npm-dependencies.json') -Destination (Join-Path $stage 'metadata')
 
