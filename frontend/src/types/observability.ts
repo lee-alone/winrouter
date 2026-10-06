@@ -1,4 +1,5 @@
 import type { clashapi, observability } from '../../wailsjs/go/models'
+import type { TrafficBudgetStatus } from './network'
 
 export interface ConnectionSummary {
   active_tcp: number
@@ -6,6 +7,13 @@ export interface ConnectionSummary {
   listening_tcp: number
   udp_endpoints: number
   sampled_at?: string
+}
+
+export interface RealtimeMetrics {
+  counters: observability.InterfaceCounter[]
+  connections: ConnectionSummary
+  traffic_budget: TrafficBudgetStatus
+  connection_observation: boolean
 }
 
 export interface RuleHit {

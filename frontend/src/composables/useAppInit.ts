@@ -8,6 +8,7 @@ import {
   GetInterfaceSnapshot,
   GetIPv6Policy,
   GetObservations,
+  GetRealtimeMetrics,
   GetRecoveryStatus,
   GetSRSPresets,
   GetStatus,
@@ -43,6 +44,7 @@ import {
   syncSelection,
 } from './useNetworkInterfaces'
 import {
+  applyRealtimeMetrics,
   formatBytes,
   normalizeObservations,
   observations,
@@ -178,16 +180,15 @@ export async function initializeApp() {
 
   statusTimer = window.setInterval(async () => {
     try {
-      const [status, recovery, observed] = await Promise.all([
+      const [status, recovery, metrics] = await Promise.all([
         GetCoreStatus(),
         GetRecoveryStatus(),
-        GetObservations(),
+        GetRealtimeMetrics(),
       ])
       coreStatus.value = status
       recoveryStatus.value = recovery as RecoveryStatus
-      observations.value = normalizeObservations(observed)
+      applyRealtimeMetrics(metrics)
       observationsError.value = ''
-      sampleTraffic(observations.value.counters)
     } catch (reason) {
       observationsError.value = messageOf(reason)
     }

@@ -15,6 +15,13 @@ import (
 	"winrouter/internal/trafficbudget"
 )
 
+type RealtimeMetrics struct {
+	Counters              []observability.InterfaceCounter `json:"counters"`
+	Connections           observability.ConnectionSummary  `json:"connections"`
+	TrafficBudget         trafficbudget.Status             `json:"traffic_budget"`
+	ConnectionObservation bool                             `json:"connection_observation"`
+}
+
 type ObservationSnapshot struct {
 	Logs                  []observability.LogEntry         `json:"logs"`
 	Probes                []observability.ProbeResult      `json:"probes"`
@@ -27,22 +34,21 @@ type ObservationSnapshot struct {
 	TrafficBudget         trafficbudget.Status             `json:"traffic_budget"`
 }
 
-func (a *App) GetObservations() (ObservationSnapshot, error) {
+func (a *App) GetRealtimeMetrics() (RealtimeMetrics, error) {
 	snapshot, err := a.GetInterfaceSnapshot()
 	if err != nil {
-		return ObservationSnapshot{}, err
+		return RealtimeMetrics{}, err
 	}
 	counters, err := observability.ReadInterfaceCounters(snapshot.Adapters)
 	if err != nil {
 		a.observations.Log(observability.LevelWarning, "interfaces", "Interface counter sampling failed", "", map[string]any{"error": err.Error()})
-		return ObservationSnapshot{}, err
+		return RealtimeMetrics{}, err
 	}
 	connections, err := observability.ReadConnectionSummary()
 	if err != nil {
 		a.observations.Log(observability.LevelWarning, "connections", "Connection sampling failed", "", map[string]any{"error": err.Error()})
-		return ObservationSnapshot{}, err
+		return RealtimeMetrics{}, err
 	}
-	coreStatus, _ := a.GetCoreStatus()
 	budgetStatus := a.GetTrafficBudgetStatus()
 	a.mu.RLock()
 	budgetManager := a.trafficBudget
@@ -65,6 +71,20 @@ func (a *App) GetObservations() (ObservationSnapshot, error) {
 			}
 		}
 	}
+	return RealtimeMetrics{
+		Counters:              counters,
+		Connections:           connections,
+		TrafficBudget:         budgetStatus,
+		ConnectionObservation: a.connectionObservation.Load(),
+	}, nil
+}
+
+func (a *App) GetObservations() (ObservationSnapshot, error) {
+	metrics, err := a.GetRealtimeMetrics()
+	if err != nil {
+		return ObservationSnapshot{}, err
+	}
+	coreStatus, _ := a.GetCoreStatus()
 	events := []clashapi.Summary(nil)
 	if a.connectionObservation.Load() && coreStatus.State == "running" {
 		a.mu.RLock()
@@ -77,7 +97,17 @@ func (a *App) GetObservations() (ObservationSnapshot, error) {
 			events = clashapi.Aggregate(result.Connections)
 		}
 	}
-	return ObservationSnapshot{Logs: a.observations.Logs(), Probes: a.observations.Probes(), Counters: counters, RuleSets: a.observations.RuleSets(), Connections: connections, RuleHits: observability.ParseRuleHits(coreStatus.CoreLog), ConnectionObservation: a.connectionObservation.Load(), ConnectionEvents: events, TrafficBudget: budgetStatus}, nil
+	return ObservationSnapshot{
+		Logs:                  a.observations.Logs(),
+		Probes:                a.observations.Probes(),
+		Counters:              metrics.Counters,
+		RuleSets:              a.observations.RuleSets(),
+		Connections:           metrics.Connections,
+		RuleHits:              observability.ParseRuleHits(coreStatus.CoreLog),
+		ConnectionObservation: metrics.ConnectionObservation,
+		ConnectionEvents:      events,
+		TrafficBudget:         metrics.TrafficBudget,
+	}, nil
 }
 
 func (a *App) SetConnectionObservationEnabled(enabled bool) error {

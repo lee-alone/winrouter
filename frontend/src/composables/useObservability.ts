@@ -1,7 +1,7 @@
-import { computed, ref } from 'vue'
+import { computed, ref, shallowRef } from 'vue'
 import { GetConnectionObservationEnabled, GetObservations, SetConnectionObservationEnabled } from '../../wailsjs/go/app/App'
 import { t } from '../i18n'
-import type { ConnectionEvent, ConnectionSummary, CounterBaseline, observability, RuleHit, TrafficBudgetStatus, TrafficPoint, UsageBaseline } from '../types'
+import type { ConnectionEvent, ConnectionSummary, CounterBaseline, observability, RealtimeMetrics, RuleHit, TrafficBudgetStatus, TrafficPoint, UsageBaseline } from '../types'
 import { addLog } from './useAppLogs'
 import { error, messageOf, notice } from './useFeedback'
 import { selectedA, selectedB } from './useNetworkInterfaces'
@@ -18,7 +18,7 @@ export const emptyTrafficBudget: TrafficBudgetStatus = {
   limit_reached: false,
 }
 
-export const observations = ref<{
+export const observations = shallowRef<{
   probes: observability.ProbeResult[]
   counters: observability.InterfaceCounter[]
   rule_sets: observability.RuleSetMetadata[]
@@ -77,6 +77,24 @@ export function normalizeObservations(value?: Partial<typeof observations.value>
   }
 }
 
+export function applyRealtimeMetrics(metrics: RealtimeMetrics) {
+  const rawConnections = (metrics?.connections ?? {}) as Partial<ConnectionSummary>
+  observations.value = {
+    ...observations.value,
+    counters: metrics?.counters ?? [],
+    connections: {
+      active_tcp: observationCount(rawConnections.active_tcp),
+      established_tcp: observationCount(rawConnections.established_tcp),
+      listening_tcp: observationCount(rawConnections.listening_tcp),
+      udp_endpoints: observationCount(rawConnections.udp_endpoints),
+      sampled_at: rawConnections.sampled_at,
+    },
+    traffic_budget: metrics?.traffic_budget ?? emptyTrafficBudget,
+    connection_observation: Boolean(metrics?.connection_observation),
+  }
+  sampleTraffic(observations.value.counters)
+}
+
 export function sampleTraffic(counters: observability.InterfaceCounter[]) {
   const rates: Record<string, { down: number; up: number }> = {}
   for (const counter of counters) {
@@ -118,8 +136,12 @@ export async function toggleConnectionObservation() {
   error.value = ''
   try {
     await SetConnectionObservationEnabled(!observations.value.connection_observation)
-    observations.value.connection_observation = await GetConnectionObservationEnabled()
-    notice.value = observations.value.connection_observation
+    const enabled = await GetConnectionObservationEnabled()
+    observations.value = {
+      ...observations.value,
+      connection_observation: enabled,
+    }
+    notice.value = enabled
       ? '连接观测已开启，下次启动核心后生效。'
       : '连接观测已关闭。'
   } catch (reason) {

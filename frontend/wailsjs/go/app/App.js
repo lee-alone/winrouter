@@ -98,6 +98,10 @@ export function GetProxySelection() {
   return window['go']['app']['App']['GetProxySelection']();
 }
 
+export function GetRealtimeMetrics() {
+  return window['go']['app']['App']['GetRealtimeMetrics']();
+}
+
 export function GetRecoveryStatus() {
   return window['go']['app']['App']['GetRecoveryStatus']();
 }

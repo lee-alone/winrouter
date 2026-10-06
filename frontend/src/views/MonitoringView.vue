@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { onMounted, onUnmounted } from 'vue'
 import { coreStatus } from '../composables/useCoreManager'
 import {
   routingMode,
@@ -14,6 +15,7 @@ import {
   latestTraffic,
   observations,
   observationsError,
+  refreshObservations,
   resetInterfaceUsage,
   ruleHitA,
   ruleHitB,
@@ -22,6 +24,23 @@ import {
   trafficHeight,
 } from '../composables/useObservability'
 import { t } from '../i18n'
+
+let timer: number | undefined
+
+onMounted(async () => {
+  await refreshObservations()
+  timer = window.setInterval(async () => {
+    if (coreStatus.value.state === 'running') {
+      await refreshObservations()
+    }
+  }, 5000)
+})
+
+onUnmounted(() => {
+  if (timer !== undefined) {
+    window.clearInterval(timer)
+  }
+})
 </script>
 
 <template>

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { onMounted } from 'vue'
 import { filteredLogs, levelText, logFilter } from '../composables/useAppLogs'
 import {
   applyRecommendation,
@@ -15,7 +16,11 @@ import {
 } from '../composables/useDiagnostics'
 import { busy } from '../composables/useFeedback'
 import { routingMode } from '../composables/useNetworkInterfaces'
-import { observations } from '../composables/useObservability'
+import { observations, refreshObservations } from '../composables/useObservability'
+
+onMounted(async () => {
+  await refreshObservations()
+})
 </script>
 
 <template>

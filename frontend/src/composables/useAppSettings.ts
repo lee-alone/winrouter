@@ -57,7 +57,10 @@ export async function saveTrafficBudget() {
   notice.value = ''
   try {
     const status = (await SetTrafficBudget({ ...budgetForm.value })) as TrafficBudgetStatus
-    observations.value.traffic_budget = status
+    observations.value = {
+      ...observations.value,
+      traffic_budget: status,
+    }
     notice.value = status.enabled ? '网卡 B 月度流量预算提醒已保存。' : '网卡 B 流量预算提醒已停用。'
   } catch (reason) {
     error.value = `无法保存流量预算：${messageOf(reason)}`
@@ -70,7 +73,11 @@ export async function resetTrafficBudget() {
   if (!window.confirm('将本月已统计的网卡 B 流量归零？此操作不会改变运营商统计。')) return
   budgetBusy.value = true
   try {
-    observations.value.traffic_budget = (await ResetTrafficBudget()) as TrafficBudgetStatus
+    const status = (await ResetTrafficBudget()) as TrafficBudgetStatus
+    observations.value = {
+      ...observations.value,
+      traffic_budget: status,
+    }
     notice.value = '本月本地流量统计已归零。'
   } catch (reason) {
     error.value = `无法重置流量统计：${messageOf(reason)}`

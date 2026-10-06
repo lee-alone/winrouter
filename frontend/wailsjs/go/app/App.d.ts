@@ -65,6 +65,8 @@ export function GetObservations():Promise<app.ObservationSnapshot>;
 
 export function GetProxySelection():Promise<nodes.ProxySelection>;
 
+export function GetRealtimeMetrics():Promise<app.RealtimeMetrics>;
+
 export function GetRecoveryStatus():Promise<recovery.Status>;
 
 export function GetRuleProfile(arg1:string):Promise<rulesettings.Profile>;
