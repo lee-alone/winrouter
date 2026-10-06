@@ -9,7 +9,6 @@ import {
   GetIPv6Policy,
   GetObservations,
   GetRecoveryStatus,
-  GetRuleSettings,
   GetSRSPresets,
   GetStatus,
   GetTrafficBudgetStatus,
@@ -57,11 +56,9 @@ import {
   subscriptionList,
 } from './useProxyManager'
 import {
-  customRules,
-  defaultOutbound,
-  ruleOrder,
-  ruleUpdateOutbound,
-  saveRuleSettings,
+  loadRuleProfiles,
+  reconcileProfileRuleOrder,
+  ruleProfiles,
   srsPresets,
   srsSources,
 } from './useRulesManager'
@@ -116,7 +113,6 @@ export async function initializeApp() {
       storedDNS,
       presets,
       storedIPv6,
-      storedRules,
     ] = await Promise.all([
       GetStatus(),
       GetInterfaceSnapshot(),
@@ -128,7 +124,6 @@ export async function initializeApp() {
       GetDNSSettings(),
       GetDNSPresets(),
       GetIPv6Policy(),
-      GetRuleSettings(),
     ])
 
     app.value = appStatus
@@ -143,30 +138,17 @@ export async function initializeApp() {
     dnsSettings.value = normalizeDNSSettings(storedDNS as DNSSettings)
     dnsPresets.value = presets as DNSPreset[]
     ipv6Policy.value = storedIPv6 as 'block' | 'split'
-    customRules.value = (Array.isArray(storedRules.rules) ? storedRules.rules : []) as CustomRule[]
-    ruleOrder.value = [...(Array.isArray(storedRules.rule_order) ? storedRules.rule_order : [])]
-    defaultOutbound.value = (storedRules.default_outbound as 'a' | 'b' | 'c') || 'b'
-    ruleUpdateOutbound.value = (storedRules.rule_update_outbound as 'auto' | 'a' | 'b' | 'c') || 'auto'
 
     await refreshProxyState()
     subscriptionList.value = await ListSubscriptions()
     srsPresets.value = await GetSRSPresets()
     srsSources.value = await ListSRSSources()
 
-    for (const source of srsSources.value) {
-      if (!ruleOrder.value.includes(`srs:${source.id}`)) ruleOrder.value.push(`srs:${source.id}`)
+    await loadRuleProfiles()
+    for (const mode of ['single', 'dual'] as const) {
+      reconcileProfileRuleOrder(ruleProfiles.value[mode], srsSources.value)
     }
-    const validRuleKeys = new Set([
-      ...customRules.value.map(rule => rule.id),
-      ...srsSources.value.map(source => `srs:${source.id}`),
-    ])
-    ruleOrder.value = ruleOrder.value.filter(key => validRuleKeys.has(key))
-    if (ruleOrder.value.includes('default-private-lan')) {
-      ruleOrder.value = ['default-private-lan', ...ruleOrder.value.filter(key => key !== 'default-private-lan')]
-    } else if (customRules.value.some(rule => rule.id === 'default-private-lan')) {
-      ruleOrder.value.unshift('default-private-lan')
-    }
-    await saveRuleSettings()
+
     addLog('info', `应用已就绪，发现 ${interfaceSnapshot.candidates.length} 块候选网卡。`)
   } catch (reason) {
     initializationFailed.value = true

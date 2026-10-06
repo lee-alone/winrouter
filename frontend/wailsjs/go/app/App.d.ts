@@ -67,6 +67,8 @@ export function GetProxySelection():Promise<nodes.ProxySelection>;
 
 export function GetRecoveryStatus():Promise<recovery.Status>;
 
+export function GetRuleProfile(arg1:string):Promise<rulesettings.Profile>;
+
 export function GetRuleSettings():Promise<rulesettings.Settings>;
 
 export function GetSRSPresets():Promise<Array<srssets.Preset>>;
@@ -132,6 +134,8 @@ export function SetProxyNodeEgress(arg1:string,arg2:string):Promise<nodes.Node>;
 export function SetProxyNodeFavorite(arg1:string,arg2:boolean):Promise<nodes.Node>;
 
 export function SetRoutingMode(arg1:string):Promise<interfacemanager.Snapshot>;
+
+export function SetRuleProfile(arg1:string,arg2:rulesettings.Profile):Promise<rulesettings.Profile>;
 
 export function SetRuleSettings(arg1:rulesettings.Settings):Promise<rulesettings.Settings>;
 

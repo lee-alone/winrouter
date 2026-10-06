@@ -102,6 +102,10 @@ export function GetRecoveryStatus() {
   return window['go']['app']['App']['GetRecoveryStatus']();
 }
 
+export function GetRuleProfile(arg1) {
+  return window['go']['app']['App']['GetRuleProfile'](arg1);
+}
+
 export function GetRuleSettings() {
   return window['go']['app']['App']['GetRuleSettings']();
 }
@@ -232,6 +236,10 @@ export function SetProxyNodeFavorite(arg1, arg2) {
 
 export function SetRoutingMode(arg1) {
   return window['go']['app']['App']['SetRoutingMode'](arg1);
+}
+
+export function SetRuleProfile(arg1, arg2) {
+  return window['go']['app']['App']['SetRuleProfile'](arg1, arg2);
 }
 
 export function SetRuleSettings(arg1) {

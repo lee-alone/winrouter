@@ -3,7 +3,6 @@ import {
   GetDNSSettings,
   GetInterfaceSnapshot,
   GetIPv6Policy,
-  GetRuleSettings,
   RepairApplicationSettings,
   ResetApplicationSettings,
   ResetInterfaceSelection,
@@ -13,7 +12,7 @@ import {
   SetTrafficBudget,
 } from '../../wailsjs/go/app/App'
 import type { app as appModels } from '../../wailsjs/go/models'
-import type { CustomRule, DNSSettings, TrafficBudgetStatus } from '../types'
+import type { DNSSettings, TrafficBudgetStatus } from '../types'
 import { addLog } from './useAppLogs'
 import { coreStatus } from './useCoreManager'
 import { dnsSettings, normalizeDNSSettings } from './useDNSManager'
@@ -21,12 +20,7 @@ import { error, messageOf, notice } from './useFeedback'
 import { setView } from './useNavigation'
 import { ipv6Policy, syncSelection } from './useNetworkInterfaces'
 import { observations } from './useObservability'
-import {
-  customRules,
-  defaultOutbound,
-  ruleOrder,
-  ruleUpdateOutbound,
-} from './useRulesManager'
+import { loadRuleProfiles } from './useRulesManager'
 
 export const autostartEnabled = ref(false)
 export const autostartBusy = ref(false)
@@ -140,11 +134,7 @@ export async function resetApplicationSettings() {
   try {
     const backup = await ResetApplicationSettings()
     syncSelection(await GetInterfaceSnapshot())
-    const storedRules = await GetRuleSettings()
-    customRules.value = Array.isArray(storedRules.rules) ? (storedRules.rules as CustomRule[]) : []
-    ruleOrder.value = Array.isArray(storedRules.rule_order) ? [...storedRules.rule_order] : []
-    defaultOutbound.value = storedRules.default_outbound as 'a' | 'b' | 'c'
-    ruleUpdateOutbound.value = (storedRules.rule_update_outbound as 'auto' | 'a' | 'b' | 'c') || 'auto'
+    await loadRuleProfiles()
     dnsSettings.value = normalizeDNSSettings((await GetDNSSettings()) as DNSSettings)
     ipv6Policy.value = (await GetIPv6Policy()) as 'block' | 'split'
     coreStatus.value = { ...coreStatus.value, state: 'stopped', pid: 0 }

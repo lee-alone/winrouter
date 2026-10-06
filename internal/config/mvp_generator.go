@@ -52,7 +52,7 @@ func GenerateMVP(input MVPConfig) (Generated, error) {
 		{Type: "direct", Tag: "foreign-direct", BindInterface: interfaceBBind},
 	}
 	effectiveDefault := input.DefaultOutbound
-	if effectiveDefault == "" && isSingle {
+	if (effectiveDefault == "" || effectiveDefault == "b") && isSingle {
 		effectiveDefault = "a"
 	}
 	finalOutbound := "foreign-direct"
@@ -135,7 +135,11 @@ func GenerateMVP(input MVPConfig) (Generated, error) {
 		case "a":
 			mapped.Action, mapped.Outbound = "route", "domestic-direct"
 		case "b":
-			mapped.Action, mapped.Outbound = "route", "foreign-direct"
+			if isSingle {
+				mapped.Action, mapped.Outbound = "route", "domestic-direct"
+			} else {
+				mapped.Action, mapped.Outbound = "route", "foreign-direct"
+			}
 		case "c":
 			mapped.Action, mapped.Outbound = "route", "proxy"
 		case "final":
@@ -180,7 +184,11 @@ func GenerateMVP(input MVPConfig) (Generated, error) {
 		case "a":
 			action, server = "route", "dns-domestic"
 		case "b":
-			action, server = "route", "dns-global"
+			if isSingle {
+				action, server = "route", "dns-domestic"
+			} else {
+				action, server = "route", "dns-global"
+			}
 		case "c":
 			action, server = "route", "dns-proxy"
 		case "final":
@@ -212,7 +220,11 @@ func GenerateMVP(input MVPConfig) (Generated, error) {
 		case "a":
 			action, server = "route", "dns-domestic"
 		case "b":
-			action, server = "route", "dns-global"
+			if isSingle {
+				action, server = "route", "dns-domestic"
+			} else {
+				action, server = "route", "dns-global"
+			}
 		case "c":
 			action, server = "route", "dns-proxy"
 		case "final":
@@ -279,7 +291,11 @@ func GenerateMVP(input MVPConfig) (Generated, error) {
 		case "a":
 			outbound = "domestic-direct"
 		case "b":
-			outbound = "foreign-direct"
+			if isSingle {
+				outbound = "domestic-direct"
+			} else {
+				outbound = "foreign-direct"
+			}
 		case "c":
 			outbound = "proxy"
 		case "final":

@@ -6,48 +6,33 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"strings"
 )
 
 const maxSRSSize = 32 << 20
 
 func fetchSRS(ctx context.Context, client *http.Client, rawURL string) ([]byte, error) {
-	urls := []string{rawURL}
-	if strings.HasPrefix(rawURL, "https://raw.githubusercontent.com/") {
-		urls = append(urls, "https://ghfast.top/"+rawURL)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+	if err != nil {
+		return nil, err
 	}
-	var lastErr error
-	for _, targetURL := range urls {
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, targetURL, nil)
-		if err != nil {
-			lastErr = err
-			continue
-		}
-		req.Header.Set("Accept", "application/octet-stream")
-		response, err := client.Do(req)
-		if err != nil {
-			lastErr = err
-			continue
-		}
-		if response.StatusCode != http.StatusOK {
-			response.Body.Close()
-			lastErr = fmt.Errorf("HTTP %d", response.StatusCode)
-			continue
-		}
-		data, err := io.ReadAll(io.LimitReader(response.Body, maxSRSSize+1))
-		response.Body.Close()
-		if err != nil || len(data) > maxSRSSize {
-			lastErr = errors.New("invalid response size")
-			continue
-		}
-		if len(data) < 3 || string(data[:3]) != "SRS" {
-			lastErr = errors.New("invalid SRS header")
-			continue
-		}
-		return data, nil
+	req.Header.Set("Accept", "application/octet-stream")
+	response, err := client.Do(req)
+	if err != nil {
+		return nil, err
 	}
-	if lastErr != nil {
-		return nil, lastErr
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("HTTP %d", response.StatusCode)
 	}
-	return nil, errors.New("download failed")
+	data, err := io.ReadAll(io.LimitReader(response.Body, maxSRSSize+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > maxSRSSize {
+		return nil, errors.New("invalid response size")
+	}
+	if len(data) < 3 || string(data[:3]) != "SRS" {
+		return nil, errors.New("invalid SRS header")
+	}
+	return data, nil
 }

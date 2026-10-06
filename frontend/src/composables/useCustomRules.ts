@@ -1,10 +1,6 @@
 import { computed, ref } from 'vue'
-import { SetRuleSettings } from '../../wailsjs/go/app/App'
-import type { rulesettings } from '../../wailsjs/go/models'
 import type { CustomRule, InlineRuleType, MasterRow, RuleAction, RuleForm } from '../types'
-import { error, messageOf } from './useFeedback'
 import {
-  routingMode,
   selectedAdapterA,
   selectedAdapterB,
 } from './useNetworkInterfaces'
@@ -15,78 +11,101 @@ import {
   proxyNodes,
 } from './useProxyManager'
 import { refreshRulePreview } from './useRulePreview'
+import {
+  currentProfile,
+  defaultOutbound,
+  onRuleModeChange,
+  saveRuleSettings,
+  selectedRuleMode,
+} from './useRuleProfiles'
 import { resetSRSForm, srsSources, submitSRSSource } from './useSRSRules'
 
-export const defaultOutbound = ref<'a' | 'b' | 'c'>('b')
-export const ruleUpdateOutbound = ref<'auto' | 'a' | 'b' | 'c'>('auto')
-export const customRules = ref<CustomRule[]>([])
-export const ruleOrder = ref<string[]>([])
+
+onRuleModeChange(() => {
+  resetRuleForm()
+  void refreshRulePreview()
+})
+
+export const customRules = computed<CustomRule[]>(() => {
+  return (currentProfile.value.rules || []) as CustomRule[]
+})
+
+export const ruleOrder = computed<string[]>({
+  get: () => currentProfile.value.rule_order || [],
+  set: (val) => {
+    currentProfile.value.rule_order = val
+  },
+})
+
 export const ruleFormOpen = ref(false)
 export const ruleForm = ref<RuleForm>({ id: '', name: '', type: 'domain-suffix', valuesText: '', action: 'a', enabled: true })
 
-let ruleSettingsSave = Promise.resolve()
-let ruleSettingsSaveError: unknown
 
 export const masterRows = computed<MasterRow[]>(() => {
   const rows: MasterRow[] = []
   const seen = new Set<string>()
-  for (const key of ruleOrder.value) {
-    const rule = customRules.value.find(item => item.id === key)
+  const profile = currentProfile.value
+  const isSingle = selectedRuleMode.value === 'single'
+
+  for (const key of profile.rule_order || []) {
+    const rule = (profile.rules || []).find(item => item.id === key)
     if (rule) {
-      rows.push({ key, kind: 'custom', rule })
+      rows.push({ key, kind: 'custom', rule: rule as CustomRule })
       seen.add(key)
       continue
     }
     const source = srsSources.value.find(item => `srs:${item.id}` === key)
     if (source) {
-      rows.push({ key, kind: 'srs', source })
+      const effectiveAction = profile.srs_actions?.[source.id] || (isSingle && source.action === 'b' ? 'a' : source.action)
+      const effectiveEnabled = profile.srs_enabled?.[source.id] ?? source.enabled
+      rows.push({
+        key,
+        kind: 'srs',
+        source: {
+          ...source,
+          action: effectiveAction,
+          enabled: effectiveEnabled,
+        },
+      })
       seen.add(key)
     }
   }
-  for (const rule of customRules.value) if (!seen.has(rule.id)) rows.push({ key: rule.id, kind: 'custom', rule })
-  for (const source of srsSources.value) if (!seen.has(`srs:${source.id}`)) rows.push({ key: `srs:${source.id}`, kind: 'srs', source })
+
+  for (const rule of profile.rules || []) {
+    if (!seen.has(rule.id)) {
+      rows.push({ key: rule.id, kind: 'custom', rule: rule as CustomRule })
+    }
+  }
+
+  for (const source of srsSources.value) {
+    if (!seen.has(`srs:${source.id}`)) {
+      const effectiveAction = profile.srs_actions?.[source.id] || (isSingle && source.action === 'b' ? 'a' : source.action)
+      const effectiveEnabled = profile.srs_enabled?.[source.id] ?? source.enabled
+      rows.push({
+        key: `srs:${source.id}`,
+        kind: 'srs',
+        source: {
+          ...source,
+          action: effectiveAction,
+          enabled: effectiveEnabled,
+        },
+      })
+    }
+  }
+
   return rows
 })
 
-export function saveRuleSettings(): Promise<void> {
-  const snapshotData = {
-    schema_version: 2,
-    initialized: true,
-    default_outbound: defaultOutbound.value,
-    rule_update_outbound: ruleUpdateOutbound.value,
-    rules: customRules.value.map(rule => ({
-      id: rule.id,
-      name: rule.name,
-      type: rule.type,
-      values: rule.values,
-      action: rule.action,
-      enabled: rule.enabled,
-    })),
-    rule_order: [...ruleOrder.value],
-  } as rulesettings.Settings
-
-  ruleSettingsSave = ruleSettingsSave
-    .then(async () => {
-      await SetRuleSettings(snapshotData)
-      ruleSettingsSaveError = undefined
-      localStorage.removeItem('winrouter.customRules.v1')
-      localStorage.removeItem('winrouter.ruleOrder.v1')
-      localStorage.removeItem('winrouter.default-outbound.v1')
-    })
-    .catch(reason => {
-      ruleSettingsSaveError = reason
-      error.value = `无法保存规则设置：${messageOf(reason)}`
-    })
-  return ruleSettingsSave
-}
-
-export async function flushRuleSettings(): Promise<void> {
-  await ruleSettingsSave
-  if (ruleSettingsSaveError) throw ruleSettingsSaveError
-}
 
 export function resetRuleForm() {
-  ruleForm.value = { id: '', name: '', type: 'domain-suffix', valuesText: '', action: 'a', enabled: true }
+  ruleForm.value = {
+    id: '',
+    name: '',
+    type: 'domain-suffix',
+    valuesText: '',
+    action: 'a',
+    enabled: true,
+  }
   resetSRSForm()
   ruleFormOpen.value = false
 }
@@ -97,13 +116,14 @@ export function editCustomRule(rule: CustomRule) {
 }
 
 export function moveMasterRule(key: string, direction: -1 | 1) {
-  const index = ruleOrder.value.indexOf(key)
+  const order = currentProfile.value.rule_order
+  const index = order.indexOf(key)
   const target = index + direction
-  if (index < 0 || target < 0 || target >= ruleOrder.value.length) return
-  const next = [...ruleOrder.value]
+  if (index < 0 || target < 0 || target >= order.length) return
+  const next = [...order]
   const [item] = next.splice(index, 1)
   next.splice(target, 0, item)
-  ruleOrder.value = next
+  currentProfile.value.rule_order = next
   void saveRuleSettings().then(refreshRulePreview)
 }
 
@@ -148,11 +168,14 @@ export async function submitRule() {
     action: ruleForm.value.action,
     enabled: ruleForm.value.enabled,
   }
-  const index = customRules.value.findIndex(rule => rule.id === next.id)
+  const rules = currentProfile.value.rules as CustomRule[]
+  const index = rules.findIndex(rule => rule.id === next.id)
   next.enabled = next.enabled !== false
-  if (index >= 0) customRules.value[index] = next
-  else customRules.value.push(next)
-  if (!ruleOrder.value.includes(next.id)) ruleOrder.value.push(next.id)
+  if (index >= 0) rules[index] = next
+  else rules.push(next)
+  if (!currentProfile.value.rule_order.includes(next.id)) {
+    currentProfile.value.rule_order.push(next.id)
+  }
   await saveRuleSettings()
   resetRuleForm()
   await refreshRulePreview()
@@ -160,26 +183,16 @@ export async function submitRule() {
 
 export async function deleteCustomRule(id: string) {
   if (id === 'default-private-lan') return
-  customRules.value = customRules.value.filter(rule => rule.id !== id)
-  ruleOrder.value = ruleOrder.value.filter(key => key !== id)
+  currentProfile.value.rules = (currentProfile.value.rules as CustomRule[]).filter(rule => rule.id !== id)
+  currentProfile.value.rule_order = currentProfile.value.rule_order.filter(key => key !== id)
   await saveRuleSettings()
   await refreshRulePreview()
-}
-
-export function updateDefaultOutbound(value: 'a' | 'b' | 'c') {
-  defaultOutbound.value = value
-  void saveRuleSettings().then(refreshRulePreview)
-}
-
-export function updateRuleUpdateOutbound(value: 'auto' | 'a' | 'b' | 'c') {
-  ruleUpdateOutbound.value = value
-  void saveRuleSettings()
 }
 
 export function formatRuleAction(action: RuleAction): string {
   switch (action) {
     case 'a':
-      return routingMode.value === 'single'
+      return selectedRuleMode.value === 'single'
         ? `直连 · ${selectedAdapterA.value?.friendly_name ?? '主网卡'}`
         : `出口 A · ${selectedAdapterA.value?.friendly_name ?? '网卡 A'}`
     case 'b':
@@ -192,7 +205,7 @@ export function formatRuleAction(action: RuleAction): string {
     case 'reject':
       return '阻断拒绝'
     case 'final':
-      return `跟随默认 (${defaultOutbound.value === 'a' && routingMode.value === 'single' ? '直连' : defaultOutbound.value.toUpperCase()})`
+      return `跟随默认 (${defaultOutbound.value === 'a' && selectedRuleMode.value === 'single' ? '直连' : defaultOutbound.value.toUpperCase()})`
     default:
       return action
   }

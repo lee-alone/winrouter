@@ -12,10 +12,15 @@ import {
   ruleForm,
   ruleFormOpen,
   ruleOrder,
-  saveRuleSettings,
 } from './useCustomRules'
 import { error, messageOf, notice } from './useFeedback'
 import { refreshRulePreview } from './useRulePreview'
+import {
+  currentProfile,
+  ruleProfiles,
+  saveRuleSettings,
+  selectedRuleMode,
+} from './useRuleProfiles'
 
 export const srsPresets = ref<srssets.Preset[]>([])
 export const srsSources = ref<srssets.Source[]>([])
@@ -93,7 +98,21 @@ export async function submitSRSSource() {
       license: '',
     } as srssets.Source)
     const key = `srs:${configured.id}`
-    if (!ruleOrder.value.includes(key)) ruleOrder.value.push(key)
+    const profile = currentProfile.value
+    if (!profile.rule_order) profile.rule_order = []
+    if (!profile.rule_order.includes(key)) profile.rule_order.push(key)
+    if (!profile.srs_actions) profile.srs_actions = {}
+    if (!profile.srs_enabled) profile.srs_enabled = {}
+    profile.srs_actions[configured.id] = ruleForm.value.action
+    profile.srs_enabled[configured.id] = ruleForm.value.enabled
+
+    const otherMode = selectedRuleMode.value === 'single' ? 'dual' : 'single'
+    const otherProf = ruleProfiles.value[otherMode]
+    if (otherProf) {
+      if (!otherProf.rule_order) otherProf.rule_order = []
+      if (!otherProf.rule_order.includes(key)) otherProf.rule_order.push(key)
+    }
+
     srsSources.value = await ListSRSSources()
     await saveRuleSettings()
     notice.value = '规则集已保存。下载并验证成功前不会参与分流。'
@@ -128,9 +147,12 @@ export async function toggleSRSSource(source: srssets.Source) {
   error.value = ''
   notice.value = ''
   try {
-    await ConfigureSRSSource({ ...source, enabled: !source.enabled } as srssets.Source)
-    srsSources.value = await ListSRSSources()
-    notice.value = `${source.name} 已${source.enabled ? '停用' : '启用'}。`
+    const profile = currentProfile.value
+    if (!profile.srs_enabled) profile.srs_enabled = {}
+    const nextEnabled = !source.enabled
+    profile.srs_enabled[source.id] = nextEnabled
+    await saveRuleSettings()
+    notice.value = `${source.name} 已在${selectedRuleMode.value === 'single' ? '单网卡' : '双网卡'}模式中${nextEnabled ? '启用' : '停用'}。`
     await refreshRulePreview()
   } catch (reason) {
     error.value = `无法更新规则状态：${messageOf(reason)}`
@@ -144,7 +166,15 @@ export async function deleteSRSSource(source: srssets.Source) {
   try {
     await DeleteSRSSource(source.id)
     srsSources.value = await ListSRSSources()
-    ruleOrder.value = ruleOrder.value.filter(key => key !== `srs:${source.id}`)
+    const key = `srs:${source.id}`
+    for (const mode of ['single', 'dual'] as const) {
+      const prof = ruleProfiles.value[mode]
+      if (prof) {
+        if (prof.rule_order) prof.rule_order = prof.rule_order.filter(k => k !== key)
+        if (prof.srs_actions) delete prof.srs_actions[source.id]
+        if (prof.srs_enabled) delete prof.srs_enabled[source.id]
+      }
+    }
     await saveRuleSettings()
     await refreshRulePreview()
     notice.value = '自定义规则集已删除。'

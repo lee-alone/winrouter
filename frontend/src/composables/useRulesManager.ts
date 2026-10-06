@@ -6,6 +6,7 @@
  * - useRulePreview: 规则编译预览及进程规则状态检查
  */
 
+export * from './useRuleProfiles'
 export * from './useCustomRules'
 export * from './useSRSRules'
 export * from './useRulePreview'

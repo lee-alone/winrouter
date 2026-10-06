@@ -11,7 +11,6 @@ import {
   testDNSServer,
 } from '../../composables/useDNSManager'
 import {
-  routingMode,
   selectedAdapterA,
   selectedAdapterB,
 } from '../../composables/useNetworkInterfaces'
@@ -22,6 +21,7 @@ import {
   proxyNodes,
 } from '../../composables/useProxyManager'
 import { refreshRulePreview } from '../../composables/useRulePreview'
+import { selectedRuleMode } from '../../composables/useRuleProfiles'
 
 async function handleSaveDNSSettings() {
   await saveDNSSettings(refreshRulePreview)
@@ -32,13 +32,13 @@ async function handleSaveDNSSettings() {
   <section class="outlet-rule-columns" aria-label="出口 DNS 设置">
     <article class="outlet-rule-group">
       <header>
-        <span>{{ routingMode === 'single' ? '主网卡直连 DNS' : '出口 A DNS' }}</span>
+        <span>{{ selectedRuleMode === 'single' ? '主网卡直连 DNS' : '出口 A DNS' }}</span>
         <h3>{{ selectedAdapterA?.friendly_name ?? '网卡 A' }}</h3>
         <small>管理该出口使用的域名解析服务</small>
       </header>
       <details class="outlet-dns-settings">
         <summary class="outlet-dns-heading">
-          <strong>{{ routingMode === 'single' ? '主网卡直连 DNS' : '出口 A DNS' }}</strong>
+          <strong>{{ selectedRuleMode === 'single' ? '主网卡直连 DNS' : '出口 A DNS' }}</strong>
           <small>{{ dnsSettings.domestic.type.toUpperCase() }} · {{ dnsSettings.domestic.server }}:{{ dnsSettings.domestic.port }}</small>
         </summary>
         <div class="dns-row">
@@ -121,13 +121,13 @@ async function handleSaveDNSSettings() {
             :disabled="dnsBusy || isRunning"
             @click="handleSaveDNSSettings"
           >
-            {{ dnsBusy ? '正在校验' : (routingMode === 'single' ? '保存直连 DNS' : '保存 A DNS') }}
+            {{ dnsBusy ? '正在校验' : (selectedRuleMode === 'single' ? '保存直连 DNS' : '保存 A DNS') }}
           </button>
         </div>
       </details>
     </article>
 
-    <article v-if="routingMode === 'dual'" class="outlet-rule-group">
+    <article v-if="selectedRuleMode === 'dual'" class="outlet-rule-group">
       <header>
         <span>出口 B DNS</span>
         <h3>{{ selectedAdapterB?.friendly_name ?? '网卡 B' }}</h3>

@@ -6,10 +6,10 @@ import {
   submitRule,
 } from '../../composables/useCustomRules'
 import {
-  routingMode,
   selectedAdapterA,
   selectedAdapterB,
 } from '../../composables/useNetworkInterfaces'
+import { selectedRuleMode } from '../../composables/useRuleProfiles'
 import {
   chooseSRSPreset,
   srsBusyID,
@@ -47,9 +47,9 @@ import {
         目标出口
         <select v-model="ruleForm.action">
           <option value="a">
-            {{ routingMode === 'single' ? '直连 (主网卡) · ' : '出口 A · ' }}{{ selectedAdapterA?.friendly_name ?? '网卡 A' }}
+            {{ selectedRuleMode === 'single' ? '直连 (主网卡) · ' : '出口 A · ' }}{{ selectedAdapterA?.friendly_name ?? '网卡 A' }}
           </option>
-          <option v-if="routingMode === 'dual'" value="b">
+          <option v-if="selectedRuleMode === 'dual'" value="b">
             出口 B · {{ selectedAdapterB?.friendly_name ?? '网卡 B' }}
           </option>
           <option value="c">出口 C · 代理出站</option>

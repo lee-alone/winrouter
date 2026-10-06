@@ -13,27 +13,10 @@ import (
 	"sync"
 )
 
-const SchemaVersion = 2
-
-const DefaultPrivateLANRuleID = "default-private-lan"
+const SchemaVersion = 3
 
 func defaultPrivateLANRule() Rule {
-	return Rule{
-		ID:   DefaultPrivateLANRuleID,
-		Name: "常用内网地址 (局域网)",
-		Type: "ip",
-		Values: []string{
-			"10.0.0.0/8",
-			"172.16.0.0/12",
-			"192.168.0.0/16",
-			"100.64.0.0/10",
-			"169.254.0.0/16",
-			"fc00::/7",
-			"fe80::/10",
-		},
-		Action:  "a",
-		Enabled: true,
-	}
+	return DefaultPrivateLANRule()
 }
 
 var ruleIDPattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9:_!-]{0,127}$`)
@@ -48,24 +31,14 @@ type Rule struct {
 }
 
 type Settings struct {
-	SchemaVersion      int      `json:"schema_version"`
-	Initialized        bool     `json:"initialized"`
-	DefaultOutbound    string   `json:"default_outbound"`
-	RuleUpdateOutbound string   `json:"rule_update_outbound,omitempty"`
-	Rules              []Rule   `json:"rules"`
-	RuleOrder          []string `json:"rule_order"`
-}
-
-func Defaults() Settings {
-	return Settings{
-		SchemaVersion:      SchemaVersion,
-		DefaultOutbound:    "b",
-		RuleUpdateOutbound: "auto",
-		Rules: []Rule{
-			defaultPrivateLANRule(),
-		},
-		RuleOrder: []string{DefaultPrivateLANRuleID},
-	}
+	SchemaVersion      int                `json:"schema_version"`
+	Initialized        bool               `json:"initialized"`
+	ActiveMode         string             `json:"active_mode,omitempty"`
+	Profiles           map[string]Profile `json:"profiles,omitempty"`
+	DefaultOutbound    string             `json:"default_outbound,omitempty"`
+	RuleUpdateOutbound string             `json:"rule_update_outbound,omitempty"`
+	Rules              []Rule             `json:"rules,omitempty"`
+	RuleOrder          []string           `json:"rule_order,omitempty"`
 }
 
 type Manager struct {
@@ -86,6 +59,7 @@ func New(path string) (*Manager, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read rule settings: %w", err)
 	}
+
 	var envelope struct {
 		Rules []struct {
 			Value json.RawMessage `json:"value"`
@@ -96,19 +70,69 @@ func New(path string) (*Manager, error) {
 	}
 	for _, rule := range envelope.Rules {
 		if len(rule.Value) > 0 && string(rule.Value) != "null" {
-			return nil, errors.New("legacy rule settings format is unsupported; use schema_version 2 with values")
+			return nil, errors.New("legacy rule settings format is unsupported; use schema_version 2/3 with values")
 		}
 	}
+
 	var stored Settings
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&stored); err != nil {
 		return nil, fmt.Errorf("decode rule settings: %w", err)
 	}
+
 	if stored.RuleUpdateOutbound == "" {
 		stored.RuleUpdateOutbound = "auto"
 	}
 	ensureDefaultPrivateLAN(&stored)
+
+	// Schema migration: If Profiles is empty (e.g. from Schema 2), migrate legacy fields into dual profile
+	if len(stored.Profiles) == 0 {
+		dualProfile := DefaultDualProfile()
+		dualProfile.Rules = append([]Rule(nil), stored.Rules...)
+		dualProfile.RuleOrder = append([]string(nil), stored.RuleOrder...)
+		if stored.DefaultOutbound != "" {
+			dualProfile.DefaultOutbound = stored.DefaultOutbound
+		}
+		if stored.RuleUpdateOutbound != "" {
+			dualProfile.RuleUpdateOutbound = stored.RuleUpdateOutbound
+		}
+		singleProfile := DefaultSingleProfile()
+		// Single profile also inherits custom rules mapped safely
+		for _, r := range stored.Rules {
+			if r.ID == DefaultPrivateLANRuleID {
+				continue
+			}
+			singleRule := r
+			if singleRule.Action == "b" {
+				singleRule.Action = "a"
+			}
+			singleProfile.Rules = append(singleProfile.Rules, singleRule)
+		}
+		stored.Profiles = map[string]Profile{
+			ModeSingle: singleProfile,
+			ModeDual:   dualProfile,
+		}
+		stored.SchemaVersion = SchemaVersion
+		stored.ActiveMode = ModeDual
+	} else {
+		if _, ok := stored.Profiles[ModeSingle]; !ok {
+			stored.Profiles[ModeSingle] = DefaultSingleProfile()
+		}
+		if _, ok := stored.Profiles[ModeDual]; !ok {
+			stored.Profiles[ModeDual] = DefaultDualProfile()
+		}
+		for mode, p := range stored.Profiles {
+			ensureProfileDefaultLAN(&p)
+			stored.Profiles[mode] = p
+		}
+	}
+
+	if stored.ActiveMode == "" {
+		stored.ActiveMode = ModeDual
+	}
+	syncLegacyFields(&stored, stored.ActiveMode)
+
 	if err := Validate(stored); err != nil {
 		return nil, err
 	}
@@ -120,6 +144,56 @@ func (m *Manager) Get() Settings {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return clone(m.settings)
+}
+
+func (m *Manager) GetProfile(mode string) Profile {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	mode = normalizeMode(mode)
+	if m.settings.Profiles != nil {
+		if p, ok := m.settings.Profiles[mode]; ok {
+			return p.Clone()
+		}
+	}
+	if mode == ModeSingle {
+		return DefaultSingleProfile()
+	}
+	return DefaultDualProfile()
+}
+
+func (m *Manager) SetProfile(mode string, profile Profile) (Profile, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	mode = normalizeMode(mode)
+
+	for ruleIndex := range profile.Rules {
+		for valueIndex, raw := range profile.Rules[ruleIndex].Values {
+			normalized, err := normalizeValue(profile.Rules[ruleIndex].Type, raw)
+			if err != nil {
+				return Profile{}, fmt.Errorf("rule %q: %w", profile.Rules[ruleIndex].ID, err)
+			}
+			profile.Rules[ruleIndex].Values[valueIndex] = normalized
+		}
+	}
+
+	ensureProfileDefaultLAN(&profile)
+	if err := profile.Validate(mode); err != nil {
+		return Profile{}, err
+	}
+
+	if m.settings.Profiles == nil {
+		m.settings.Profiles = make(map[string]Profile)
+	}
+	m.settings.Profiles[mode] = profile.Clone()
+	m.settings.ActiveMode = mode
+	m.settings.Initialized = true
+	m.settings.SchemaVersion = SchemaVersion
+	syncLegacyFields(&m.settings, mode)
+
+	if err := m.saveLocked(m.settings); err != nil {
+		return Profile{}, err
+	}
+	return profile.Clone(), nil
 }
 
 func (m *Manager) Configure(value Settings) (Settings, error) {
@@ -134,6 +208,12 @@ func (m *Manager) configureLocked(value Settings) (Settings, error) {
 	if value.RuleUpdateOutbound == "" {
 		value.RuleUpdateOutbound = "auto"
 	}
+	if value.ActiveMode == "" {
+		value.ActiveMode = ModeDual
+	}
+	targetMode := normalizeMode(value.ActiveMode)
+
+	// If top-level rules were provided, normalize them first
 	for ruleIndex := range value.Rules {
 		for valueIndex, raw := range value.Rules[ruleIndex].Values {
 			normalized, err := normalizeValue(value.Rules[ruleIndex].Type, raw)
@@ -143,20 +223,75 @@ func (m *Manager) configureLocked(value Settings) (Settings, error) {
 			value.Rules[ruleIndex].Values[valueIndex] = normalized
 		}
 	}
+
 	if err := Validate(value); err != nil {
 		return Settings{}, err
 	}
+
+	if value.Profiles == nil {
+		value.Profiles = make(map[string]Profile)
+	}
+
+	// Always sync top-level rules to the target mode Profile
+	p, ok := value.Profiles[targetMode]
+	if !ok {
+		if targetMode == ModeSingle {
+			p = DefaultSingleProfile()
+		} else {
+			p = DefaultDualProfile()
+		}
+	}
+	if value.DefaultOutbound != "" {
+		p.DefaultOutbound = value.DefaultOutbound
+	}
+	if value.RuleUpdateOutbound != "" {
+		p.RuleUpdateOutbound = value.RuleUpdateOutbound
+	}
+	p.Rules = append([]Rule(nil), value.Rules...)
+	p.RuleOrder = append([]string(nil), value.RuleOrder...)
+	value.Profiles[targetMode] = p
+
+	// Ensure the other profile exists
+	otherMode := ModeSingle
+	if targetMode == ModeSingle {
+		otherMode = ModeDual
+	}
+	if _, exists := value.Profiles[otherMode]; !exists {
+		if m.settings.Profiles != nil {
+			if existing, ok := m.settings.Profiles[otherMode]; ok {
+				value.Profiles[otherMode] = existing.Clone()
+			}
+		}
+		if _, exists := value.Profiles[otherMode]; !exists {
+			if otherMode == ModeSingle {
+				value.Profiles[otherMode] = DefaultSingleProfile()
+			} else {
+				value.Profiles[otherMode] = DefaultDualProfile()
+			}
+		}
+	}
+
+	syncLegacyFields(&value, targetMode)
+
+	if err := m.saveLocked(value); err != nil {
+		return Settings{}, err
+	}
+	m.settings = clone(value)
+	return clone(value), nil
+}
+
+func (m *Manager) saveLocked(value Settings) error {
 	value = clone(value)
 	data, err := json.MarshalIndent(value, "", "  ")
 	if err != nil {
-		return Settings{}, err
+		return err
 	}
 	if err := os.MkdirAll(filepath.Dir(m.path), 0o700); err != nil {
-		return Settings{}, err
+		return err
 	}
 	file, err := os.CreateTemp(filepath.Dir(m.path), ".rule-settings-*.tmp")
 	if err != nil {
-		return Settings{}, err
+		return err
 	}
 	temporary := file.Name()
 	defer os.Remove(temporary)
@@ -168,17 +303,16 @@ func (m *Manager) configureLocked(value Settings) (Settings, error) {
 		err = closeErr
 	}
 	if err != nil {
-		return Settings{}, err
+		return err
 	}
 	if err := replaceFile(temporary, m.path); err != nil {
-		return Settings{}, err
+		return err
 	}
-	m.settings = value
-	return clone(value), nil
+	return nil
 }
 
 func Validate(value Settings) error {
-	if value.SchemaVersion != SchemaVersion {
+	if value.SchemaVersion != 2 && value.SchemaVersion != SchemaVersion {
 		return fmt.Errorf("unsupported rule settings schema_version %d", value.SchemaVersion)
 	}
 	if value.DefaultOutbound != "a" && value.DefaultOutbound != "b" && value.DefaultOutbound != "c" {
@@ -294,13 +428,19 @@ func normalizeValue(ruleType, raw string) (string, error) {
 }
 
 func clone(value Settings) Settings {
-	// Keep empty collections non-nil so Wails exposes [] instead of null.
-	value.Rules = append([]Rule{}, value.Rules...)
-	for i := range value.Rules {
-		value.Rules[i].Values = append([]string{}, value.Rules[i].Values...)
+	out := value
+	if value.Profiles != nil {
+		out.Profiles = make(map[string]Profile, len(value.Profiles))
+		for k, v := range value.Profiles {
+			out.Profiles[k] = v.Clone()
+		}
 	}
-	value.RuleOrder = append([]string{}, value.RuleOrder...)
-	return value
+	out.Rules = append([]Rule{}, value.Rules...)
+	for i := range out.Rules {
+		out.Rules[i].Values = append([]string{}, value.Rules[i].Values...)
+	}
+	out.RuleOrder = append([]string{}, value.RuleOrder...)
+	return out
 }
 
 func isLegacyPrivateLANValues(values []string) bool {
@@ -330,7 +470,6 @@ func ensureDefaultPrivateLAN(s *Settings) {
 	if !hasPrivateLAN {
 		s.Rules = append(s.Rules, defaultPrivateLANRule())
 	}
-	// 确保 default-private-lan 位于 RuleOrder 最前面
 	newOrder := make([]string, 0, len(s.RuleOrder)+1)
 	newOrder = append(newOrder, DefaultPrivateLANRuleID)
 	for _, key := range s.RuleOrder {
@@ -339,4 +478,47 @@ func ensureDefaultPrivateLAN(s *Settings) {
 		}
 	}
 	s.RuleOrder = newOrder
+}
+
+func ensureProfileDefaultLAN(p *Profile) {
+	hasPrivateLAN := false
+	for i, rule := range p.Rules {
+		if rule.ID == DefaultPrivateLANRuleID {
+			hasPrivateLAN = true
+			if isLegacyPrivateLANValues(rule.Values) {
+				p.Rules[i].Values = defaultPrivateLANRule().Values
+			}
+			break
+		}
+	}
+	if !hasPrivateLAN {
+		p.Rules = append(p.Rules, defaultPrivateLANRule())
+	}
+	newOrder := make([]string, 0, len(p.RuleOrder)+1)
+	newOrder = append(newOrder, DefaultPrivateLANRuleID)
+	for _, key := range p.RuleOrder {
+		if key != DefaultPrivateLANRuleID {
+			newOrder = append(newOrder, key)
+		}
+	}
+	p.RuleOrder = newOrder
+}
+
+func syncLegacyFields(s *Settings, mode string) {
+	mode = normalizeMode(mode)
+	if s.Profiles != nil {
+		if p, ok := s.Profiles[mode]; ok {
+			s.DefaultOutbound = p.DefaultOutbound
+			s.RuleUpdateOutbound = p.RuleUpdateOutbound
+			s.Rules = append([]Rule(nil), p.Rules...)
+			s.RuleOrder = append([]string(nil), p.RuleOrder...)
+			return
+		}
+		if p, ok := s.Profiles[ModeDual]; ok {
+			s.DefaultOutbound = p.DefaultOutbound
+			s.RuleUpdateOutbound = p.RuleUpdateOutbound
+			s.Rules = append([]Rule(nil), p.Rules...)
+			s.RuleOrder = append([]string(nil), p.RuleOrder...)
+		}
+	}
 }

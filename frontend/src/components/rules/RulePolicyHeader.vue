@@ -1,14 +1,7 @@
 <script setup lang="ts">
 import { isRunning } from '../../composables/useCoreManager'
-import {
-  defaultOutbound,
-  ruleUpdateOutbound,
-  updateDefaultOutbound,
-  updateRuleUpdateOutbound,
-} from '../../composables/useCustomRules'
 import { dnsSettings } from '../../composables/useDNSManager'
 import {
-  routingMode,
   selectedAdapterA,
   selectedAdapterB,
 } from '../../composables/useNetworkInterfaces'
@@ -18,16 +11,23 @@ import {
   isChainReady,
   proxyNodes,
 } from '../../composables/useProxyManager'
+import {
+  defaultOutbound,
+  ruleUpdateOutbound,
+  selectedRuleMode,
+  updateDefaultOutbound,
+  updateRuleUpdateOutbound,
+} from '../../composables/useRuleProfiles'
 </script>
 
 <template>
   <section class="rule-outlet-map" aria-label="规则出口映射">
     <article>
-      <span>{{ routingMode === 'single' ? '物理主网卡' : '网卡 A' }}</span>
+      <span>{{ selectedRuleMode === 'single' ? '物理主网卡' : '网卡 A' }}</span>
       <strong>{{ selectedAdapterA?.friendly_name ?? '尚未选择' }}</strong>
       <small>{{ selectedAdapterA?.addresses?.[0]?.ip ?? '无 IPv4 地址' }} · {{ selectedAdapterA?.gateways?.[0] ?? '无网关' }}</small>
     </article>
-    <article v-if="routingMode === 'dual'">
+    <article v-if="selectedRuleMode === 'dual'">
       <span>网卡 B</span>
       <strong>{{ selectedAdapterB?.friendly_name ?? '尚未选择' }}</strong>
       <small>{{ selectedAdapterB?.addresses?.[0]?.ip ?? '无 IPv4 地址' }} · {{ selectedAdapterB?.gateways?.[0] ?? '无网关' }}</small>
@@ -36,10 +36,10 @@ import {
 
   <section class="policy-strip" aria-label="当前 DNS 出口">
     <div>
-      <span>{{ selectedAdapterA?.friendly_name ?? (routingMode === 'single' ? '主网卡' : '网卡 A') }} DNS</span>
+      <span>{{ selectedAdapterA?.friendly_name ?? (selectedRuleMode === 'single' ? '主网卡' : '网卡 A') }} DNS</span>
       <strong>{{ dnsSettings.domestic.type.toUpperCase() }} · {{ dnsSettings.domestic.server }}:{{ dnsSettings.domestic.port }}</strong>
     </div>
-    <div v-if="routingMode === 'dual'">
+    <div v-if="selectedRuleMode === 'dual'">
       <span>{{ selectedAdapterB?.friendly_name ?? '网卡 B' }} DNS</span>
       <strong>{{ dnsSettings.global.type.toUpperCase() }} · {{ dnsSettings.global.server }}:{{ dnsSettings.global.port }}</strong>
     </div>
@@ -60,9 +60,9 @@ import {
       @change="updateDefaultOutbound(($event.target as HTMLSelectElement).value as 'a' | 'b' | 'c')"
     >
       <option value="a">
-        {{ routingMode === 'single' ? '直连 (主网卡) · ' : '出口 A · ' }}{{ selectedAdapterA?.friendly_name ?? '未选择' }}
+        {{ selectedRuleMode === 'single' ? '直连 (主网卡) · ' : '出口 A · ' }}{{ selectedAdapterA?.friendly_name ?? '未选择' }}
       </option>
-      <option v-if="routingMode === 'dual'" value="b">
+      <option v-if="selectedRuleMode === 'dual'" value="b">
         出口 B · {{ selectedAdapterB?.friendly_name ?? '未选择' }}
       </option>
       <option value="c">
@@ -84,11 +84,11 @@ import {
       <option value="c">
         出口 C · 代理出站 ({{ isChainMode && isChainReady ? `套接: ${chainSummaryText}` : (proxyNodes.find(n => n.selected)?.name ?? '未配置') }})
       </option>
-      <option v-if="routingMode === 'dual'" value="b">
+      <option v-if="selectedRuleMode === 'dual'" value="b">
         出口 B · {{ selectedAdapterB?.friendly_name ?? '网卡 B' }}
       </option>
       <option value="a">
-        {{ routingMode === 'single' ? '主网卡直连 · ' : '出口 A · ' }}{{ selectedAdapterA?.friendly_name ?? '网卡 A' }}
+        {{ selectedRuleMode === 'single' ? '主网卡直连 · ' : '出口 A · ' }}{{ selectedAdapterA?.friendly_name ?? '网卡 A' }}
       </option>
     </select>
   </section>

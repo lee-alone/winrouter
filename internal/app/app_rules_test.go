@@ -33,3 +33,47 @@ func TestApplyRuleSettingsPreservesInputWhenUninitialized(t *testing.T) {
 		t.Fatalf("uninitialized settings changed input: %#v", result)
 	}
 }
+
+func TestApplyProfileToConfigSingleNICMapsBToAAndSetsDefaultA(t *testing.T) {
+	input := config.MVPConfig{Mode: "single"}
+	profile := rulesettings.Profile{
+		DefaultOutbound: "b", // Even if profile had 'b', single-NIC must normalize to 'a'
+		Rules: []rulesettings.Rule{
+			{ID: "legacy-b", Name: "Legacy B", Type: "domain", Values: []string{"example.com"}, Action: "b", Enabled: true},
+			{ID: "direct-a", Name: "Direct A", Type: "domain", Values: []string{"local.cn"}, Action: "a", Enabled: true},
+		},
+		RuleOrder: []string{"legacy-b", "direct-a"},
+	}
+	result := applyProfileToConfig(input, profile, "single")
+	if result.DefaultOutbound != "a" {
+		t.Fatalf("expected single-NIC default outbound to be 'a', got %q", result.DefaultOutbound)
+	}
+	if len(result.CustomRules) != 2 {
+		t.Fatalf("expected 2 custom rules, got %d", len(result.CustomRules))
+	}
+	if result.CustomRules[0].Action != "a" {
+		t.Fatalf("expected rule legacy-b action 'b' to be mapped to 'a' in single mode, got %q", result.CustomRules[0].Action)
+	}
+	if result.CustomRules[1].Action != "a" {
+		t.Fatalf("expected rule direct-a action to be 'a', got %q", result.CustomRules[1].Action)
+	}
+}
+
+func TestApplyProfileToConfigDualNICPreservesOutboundB(t *testing.T) {
+	input := config.MVPConfig{Mode: "dual"}
+	profile := rulesettings.Profile{
+		DefaultOutbound: "b",
+		Rules: []rulesettings.Rule{
+			{ID: "dual-b", Name: "Dual B", Type: "domain", Values: []string{"example.com"}, Action: "b", Enabled: true},
+		},
+		RuleOrder: []string{"dual-b"},
+	}
+	result := applyProfileToConfig(input, profile, "dual")
+	if result.DefaultOutbound != "b" {
+		t.Fatalf("expected dual-NIC default outbound to be 'b', got %q", result.DefaultOutbound)
+	}
+	if len(result.CustomRules) != 1 || result.CustomRules[0].Action != "b" {
+		t.Fatalf("expected dual-NIC to preserve action 'b': %#v", result.CustomRules)
+	}
+}
+

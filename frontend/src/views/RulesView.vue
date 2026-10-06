@@ -2,6 +2,7 @@
 import RuleDNSSection from '../components/rules/RuleDNSSection.vue'
 import RuleForm from '../components/rules/RuleForm.vue'
 import RuleMasterTable from '../components/rules/RuleMasterTable.vue'
+import RuleModeTabs from '../components/rules/RuleModeTabs.vue'
 import RulePolicyHeader from '../components/rules/RulePolicyHeader.vue'
 import RulePreviewSection from '../components/rules/RulePreviewSection.vue'
 import {
@@ -11,6 +12,9 @@ import {
 </script>
 
 <template>
+  <!-- 规则模式切换（单网卡/双网卡 Profile） -->
+  <RuleModeTabs />
+
   <!-- 顶部网卡出口映射、DNS策略摘要及兜底出口选择器 -->
   <RulePolicyHeader />
 

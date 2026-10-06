@@ -1,19 +1,19 @@
 $ErrorActionPreference = 'Stop'
 $files = @(
-    @{ name='geosite-cn.srs'; url='https://ghfast.top/https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-cn.srs' },
-    @{ name='geoip-cn.srs'; url='https://ghfast.top/https://raw.githubusercontent.com/SagerNet/sing-geoip/rule-set/geoip-cn.srs' },
-    @{ name='geosite-github.srs'; url='https://ghfast.top/https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-github.srs' },
-    @{ name='geosite-cloudflare.srs'; url='https://ghfast.top/https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-cloudflare.srs' },
-    @{ name='geosite-geolocation-!cn.srs'; url='https://ghfast.top/https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-geolocation-!cn.srs' },
-    @{ name='geosite-openai.srs'; url='https://ghfast.top/https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-openai.srs' },
-    @{ name='geosite-anthropic.srs'; url='https://ghfast.top/https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-anthropic.srs' },
-    @{ name='geosite-google.srs'; url='https://ghfast.top/https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-google.srs' },
-    @{ name='geosite-youtube.srs'; url='https://ghfast.top/https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-youtube.srs' },
-    @{ name='geosite-telegram.srs'; url='https://ghfast.top/https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-telegram.srs' },
-    @{ name='geosite-steam.srs'; url='https://ghfast.top/https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-steam.srs' },
-    @{ name='geosite-microsoft.srs'; url='https://ghfast.top/https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-microsoft.srs' },
-    @{ name='geosite-apple.srs'; url='https://ghfast.top/https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-apple.srs' },
-    @{ name='geosite-category-ads-all.srs'; url='https://ghfast.top/https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-category-ads-all.srs' }
+    @{ name='geosite-cn.srs'; url='https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-cn.srs' },
+    @{ name='geoip-cn.srs'; url='https://raw.githubusercontent.com/SagerNet/sing-geoip/rule-set/geoip-cn.srs' },
+    @{ name='geosite-github.srs'; url='https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-github.srs' },
+    @{ name='geosite-cloudflare.srs'; url='https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-cloudflare.srs' },
+    @{ name='geosite-geolocation-!cn.srs'; url='https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-geolocation-!cn.srs' },
+    @{ name='geosite-openai.srs'; url='https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-openai.srs' },
+    @{ name='geosite-anthropic.srs'; url='https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-anthropic.srs' },
+    @{ name='geosite-google.srs'; url='https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-google.srs' },
+    @{ name='geosite-youtube.srs'; url='https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-youtube.srs' },
+    @{ name='geosite-telegram.srs'; url='https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-telegram.srs' },
+    @{ name='geosite-steam.srs'; url='https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-steam.srs' },
+    @{ name='geosite-microsoft.srs'; url='https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-microsoft.srs' },
+    @{ name='geosite-apple.srs'; url='https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-apple.srs' },
+    @{ name='geosite-category-ads-all.srs'; url='https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-category-ads-all.srs' }
 )
 
 New-Item -ItemType Directory -Force -Path 'resources\geo' | Out-Null

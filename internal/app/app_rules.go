@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"strings"
 	"time"
 
 	"winrouter/internal/config"
@@ -78,11 +79,48 @@ func (a *App) SetRuleSettings(settings rulesettings.Settings) (rulesettings.Sett
 }
 
 func (a *App) withRuleSettings(input config.MVPConfig) (config.MVPConfig, error) {
-	settings, err := a.GetRuleSettings()
+	mode := a.resolveMode(input.Mode)
+	profile, err := a.GetRuleProfile(mode)
 	if err != nil {
-		return input, err
+		settings, sErr := a.GetRuleSettings()
+		if sErr != nil {
+			return input, err
+		}
+		return applyRuleSettings(input, settings), nil
 	}
-	return applyRuleSettings(input, settings), nil
+	return applyProfileToConfig(input, profile, mode), nil
+}
+
+func applyProfileToConfig(input config.MVPConfig, profile rulesettings.Profile, mode string) config.MVPConfig {
+	isSingle := mode == rulesettings.ModeSingle
+	effectiveDefault := profile.DefaultOutbound
+	if isSingle && (effectiveDefault == "" || effectiveDefault == "b") {
+		effectiveDefault = "a"
+	} else if effectiveDefault == "" {
+		effectiveDefault = "b"
+	}
+	input.DefaultOutbound = effectiveDefault
+	input.RuleOrder = append([]string(nil), profile.RuleOrder...)
+	input.CustomRules = make([]config.MVPCustomRule, 0, len(profile.Rules))
+	for _, rule := range profile.Rules {
+		if !rule.Enabled {
+			continue
+		}
+		action := rule.Action
+		if isSingle && action == "b" {
+			action = "a"
+		}
+		for _, value := range rule.Values {
+			input.CustomRules = append(input.CustomRules, config.MVPCustomRule{
+				ID:     rule.ID,
+				Name:   rule.Name,
+				Type:   rule.Type,
+				Value:  value,
+				Action: action,
+			})
+		}
+	}
+	return input
 }
 
 func applyRuleSettings(input config.MVPConfig, settings rulesettings.Settings) config.MVPConfig {
@@ -216,9 +254,48 @@ func (a *App) withSRSRuleSets(input config.MVPConfig) (config.MVPConfig, error) 
 	if err != nil {
 		return input, fmt.Errorf("load verified SRS rule-sets: %w", err)
 	}
+
+	mode := a.resolveMode(input.Mode)
+	profile, _ := a.GetRuleProfile(mode)
+	hasProxy := input.Proxy != nil || len(input.ProxyChain) > 0
+	isSingle := mode == rulesettings.ModeSingle
+
 	input.RuleSets = nil
 	for _, item := range active {
-		input.RuleSets = append(input.RuleSets, config.MVPRuleSet{Tag: item.Tag, Kind: item.Kind, Action: item.Action, Path: item.Path})
+		sourceID := strings.TrimPrefix(item.Tag, "winrouter-")
+		enabled := true
+		if profile.SRSEnabled != nil {
+			if en, ok := profile.SRSEnabled[sourceID]; ok {
+				enabled = en
+			}
+		}
+		if !enabled {
+			continue
+		}
+
+		action := item.Action
+		if profile.SRSActions != nil {
+			if act, ok := profile.SRSActions[sourceID]; ok && act != "" {
+				action = act
+			}
+		}
+
+		if isSingle && action == "b" {
+			action = "a"
+		}
+
+		// 单网卡模式下，如果规则指向代理 ('c') 但当前未配置任何代理节点，则安全跳过该规则集，避免阻断内核启动
+		if isSingle && action == "c" && !hasProxy {
+			a.observations.Log(observability.LevelInfo, "rules", fmt.Sprintf("单网卡模式尚未配置代理节点，规则集 %s (代理出站) 暂不参与分流", sourceID), "", nil)
+			continue
+		}
+
+		input.RuleSets = append(input.RuleSets, config.MVPRuleSet{
+			Tag:    item.Tag,
+			Kind:   item.Kind,
+			Action: action,
+			Path:   item.Path,
+		})
 	}
 	return input, nil
 }
