@@ -7,8 +7,7 @@ import {
   SetProxyNodeEgress,
   SetProxyNodeFavorite,
 } from '../../wailsjs/go/app/App'
-import type { nodes } from '../../wailsjs/go/models'
-import type { ProxyProtocolMeta } from '../types'
+import type { nodes, ProxyProtocolMeta } from '../types'
 import { ssMethods } from '../utils/proxyUri'
 import { error, messageOf, notice } from './useFeedback'
 import { applyProxySelection } from './useProxyChain'

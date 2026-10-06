@@ -1,6 +1,6 @@
 import { computed, ref, watch } from 'vue'
 import { SelectInterfaces, SelectSingleInterface, SetIPv6Policy, SetRoutingMode } from '../../wailsjs/go/app/App'
-import type { interfacemanager, interfaces } from '../../wailsjs/go/models'
+import type { interfacemanager, interfaces } from '../types'
 import { addLog } from './useAppLogs'
 import { busy, error, messageOf, notice } from './useFeedback'
 import { setView } from './useNavigation'

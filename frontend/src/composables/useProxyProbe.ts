@@ -4,7 +4,7 @@ import {
   TestProxyChain,
   TestProxyNode,
 } from '../../wailsjs/go/app/App'
-import type { nodes } from '../../wailsjs/go/models'
+import type { nodes } from '../types'
 import { getBootstrapDNSServer } from './useDNSManager'
 import { error, messageOf, notice } from './useFeedback'
 import { proxySelection } from './useProxyChain'

@@ -4,8 +4,7 @@ import {
   PreviewDiagnosticBundle,
   RunHealthProbe,
 } from '../../wailsjs/go/app/App'
-import type { observability } from '../../wailsjs/go/models'
-import type { DiagnosticRecommendation } from '../types'
+import type { DiagnosticRecommendation, observability } from '../types'
 import { addLog } from './useAppLogs'
 import { coreStatus, recoveryStatus } from './useCoreManager'
 import { busy, error, messageOf, notice } from './useFeedback'

@@ -6,7 +6,7 @@ import {
   RefreshSubscription,
   UpdateSubscription,
 } from '../../wailsjs/go/app/App'
-import type { subscriptions } from '../../wailsjs/go/models'
+import type { subscriptions } from '../types'
 import { busy, error, messageOf, notice } from './useFeedback'
 import { refreshProxyState } from './useProxyNodes'
 

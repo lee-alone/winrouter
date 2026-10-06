@@ -3,7 +3,7 @@ import {
   SelectProxyChain,
   SetProxyMode,
 } from '../../wailsjs/go/app/App'
-import type { nodes } from '../../wailsjs/go/models'
+import type { nodes } from '../types'
 import { error, messageOf, notice } from './useFeedback'
 import { proxyNodes, refreshProxyState } from './useProxyNodes'
 import { chainTestResult } from './useProxyProbe'

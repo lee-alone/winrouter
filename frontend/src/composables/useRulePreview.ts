@@ -3,7 +3,7 @@ import {
   InspectProcessRules,
   PreviewCoreRules,
 } from '../../wailsjs/go/app/App'
-import type { config, processrules } from '../../wailsjs/go/models'
+import type { config, processrules } from '../types'
 import {
   flushRuleSettings,
   ruleProfiles,

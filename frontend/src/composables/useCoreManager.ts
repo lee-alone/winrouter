@@ -6,9 +6,8 @@ import {
   StopCore,
   ValidateCoreConfiguration,
 } from '../../wailsjs/go/app/App'
-import type { core } from '../../wailsjs/go/models'
 import { t } from '../i18n'
-import type { RecoveryStatus } from '../types'
+import type { core, RecoveryStatus } from '../types'
 import type { ApplicationStatus } from '../vite-env'
 import { addLog } from './useAppLogs'
 import { busy, error, messageOf, notice } from './useFeedback'

@@ -3,7 +3,7 @@ import {
   GetRuleProfile,
   SetRuleProfile,
 } from '../../wailsjs/go/app/App'
-import type { rulesettings, srssets } from '../../wailsjs/go/models'
+import type { rulesettings, srssets } from '../types'
 import { error, messageOf } from './useFeedback'
 import { routingMode } from './useNetworkInterfaces'
 

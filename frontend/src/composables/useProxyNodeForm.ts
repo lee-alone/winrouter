@@ -3,7 +3,7 @@ import {
   AddProxyNode,
   UpdateProxyNode,
 } from '../../wailsjs/go/app/App'
-import type { nodes } from '../../wailsjs/go/models'
+import type { nodes } from '../types'
 import { parseProxyURI, ssMethods } from '../utils/proxyUri'
 import { busy, error, messageOf, notice } from './useFeedback'
 import { proxyProtocols, refreshProxyState } from './useProxyNodes'

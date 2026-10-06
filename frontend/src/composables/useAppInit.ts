@@ -15,9 +15,8 @@ import {
   ListSRSSources,
   ListSubscriptions,
 } from '../../wailsjs/go/app/App'
-import type { core } from '../../wailsjs/go/models'
 import { EventsOn } from '../../wailsjs/runtime/runtime'
-import type { CustomRule, DNSPreset, DNSSettings, RecoveryStatus } from '../types'
+import type { core, CustomRule, DNSPreset, DNSSettings, RecoveryStatus } from '../types'
 import { addLog } from './useAppLogs'
 import {
   applicationConfigDirectory,

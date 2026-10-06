@@ -11,8 +11,7 @@ import {
   SetAutostartEnabled,
   SetTrafficBudget,
 } from '../../wailsjs/go/app/App'
-import type { app as appModels } from '../../wailsjs/go/models'
-import type { DNSSettings, TrafficBudgetStatus } from '../types'
+import type { app as appModels, DNSSettings, TrafficBudgetStatus } from '../types'
 import { addLog } from './useAppLogs'
 import { coreStatus } from './useCoreManager'
 import { dnsSettings, normalizeDNSSettings } from './useDNSManager'

@@ -5,8 +5,7 @@ import {
   ListSRSSources,
   RefreshSRSSource,
 } from '../../wailsjs/go/app/App'
-import type { srssets } from '../../wailsjs/go/models'
-import type { RuleAction } from '../types'
+import type { RuleAction, srssets } from '../types'
 import {
   resetRuleForm,
   ruleForm,
