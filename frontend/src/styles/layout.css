@@ -1,0 +1,196 @@
+/* Shell Grid Layout */
+.shell {
+  display: grid;
+  grid-template-columns: 224px minmax(0, 1fr);
+  min-height: 100vh;
+}
+
+/* Sidebar / Aside */
+aside {
+  display: flex;
+  flex-direction: column;
+  padding: 26px 16px;
+  color: #f8fbfa;
+  background: #183431;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 8px 36px;
+  font-size: 20px;
+  font-weight: 700;
+}
+
+.brand-mark {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border: 1px solid #6aa099;
+  color: #e8f4f1;
+  font-size: 15px;
+}
+
+nav {
+  display: grid;
+  gap: 5px;
+}
+
+nav button {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 44px;
+  padding: 10px 13px;
+  border: 0;
+  color: #b9cbc8;
+  text-align: left;
+  background: transparent;
+  border-radius: 5px;
+  cursor: pointer;
+}
+
+nav button span {
+  width: 18px;
+  font-size: 18px;
+  text-align: center;
+}
+
+nav button:hover {
+  color: white;
+  background: #234541;
+}
+
+nav button.active {
+  color: white;
+  background: #2d5954;
+  box-shadow: inset 3px 0 #83c4ba;
+}
+
+.version {
+  margin: auto 8px 0;
+  color: #8fa8a4;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+/* Main Content Area & Header */
+main {
+  min-width: 0;
+  padding: 32px clamp(26px, 5vw, 68px) 56px;
+}
+
+header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  border-bottom: 1px solid #d5ddda;
+  padding-bottom: 20px;
+}
+
+/* Summary & Top Control Bands */
+.summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  border-bottom: 1px solid #d5ddda;
+}
+
+.summary > div {
+  display: grid;
+  align-content: start;
+  gap: 5px;
+  min-width: 0;
+  padding: 22px 18px 22px 0;
+}
+
+.summary span {
+  color: #68777a;
+  font-size: 12px;
+}
+
+.summary strong {
+  font-size: 15px;
+  overflow-wrap: anywhere;
+}
+
+.summary small {
+  color: #788487;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.setup-callout,
+.control-band {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 30px;
+  margin-top: 34px;
+  padding: 28px 0;
+  border-bottom: 1px solid #d5ddda;
+}
+
+.setup-callout p:not(.section-kicker),
+.control-band p:not(.section-kicker),
+.intro p {
+  margin: 0;
+  color: #657478;
+  line-height: 1.6;
+}
+
+.actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 26px;
+}
+
+/* Layout Responsive Media Queries */
+@media (max-width: 900px) {
+  .summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 680px) {
+  .shell {
+    grid-template-columns: 1fr;
+  }
+  aside {
+    min-height: auto;
+    padding: 14px 16px;
+  }
+  .brand {
+    margin: 0 0 12px;
+  }
+  nav {
+    grid-template-columns: repeat(7, 1fr);
+  }
+  nav button {
+    justify-content: center;
+  }
+  .version {
+    display: none;
+  }
+  main {
+    padding: 22px 17px 40px;
+  }
+  header {
+    align-items: flex-start;
+  }
+  .summary {
+    grid-template-columns: 1fr;
+    padding: 10px 0;
+  }
+  .summary > div {
+    padding: 9px 0;
+  }
+  .setup-callout,
+  .control-band {
+    align-items: stretch;
+    flex-direction: column;
+  }
+}

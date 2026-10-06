@@ -1,0 +1,276 @@
+:root {
+  font-family: "Segoe UI", "Microsoft YaHei UI", sans-serif;
+  color: #1c2529;
+  background: #f4f6f5;
+  font-synthesis: none;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+}
+
+button,
+select,
+input {
+  font: inherit;
+  letter-spacing: 0;
+}
+
+button:focus-visible,
+select:focus-visible,
+input:focus-visible {
+  outline: 3px solid #4b93ff;
+  outline-offset: 2px;
+}
+
+.eyebrow,
+.section-kicker {
+  margin: 0 0 5px;
+  color: #52706b;
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+h1 {
+  margin: 0;
+  font-size: 27px;
+  line-height: 1.25;
+  letter-spacing: 0;
+}
+
+h2 {
+  margin: 0 0 7px;
+  font-size: 19px;
+  letter-spacing: 0;
+}
+
+h3 {
+  margin: 0;
+  font-size: 15px;
+  letter-spacing: 0;
+}
+
+dl {
+  margin: 0;
+}
+
+dl div {
+  min-width: 0;
+}
+
+dd {
+  margin: 4px 0 0;
+  overflow-wrap: anywhere;
+}
+
+dt {
+  color: #68777a;
+  font-size: 12px;
+}
+
+/* Global Form Controls & Inputs */
+select {
+  width: 100%;
+  min-height: 42px;
+  padding: 8px 34px 8px 10px;
+  border: 1px solid #aebbb8;
+  color: #263532;
+  background: white;
+  border-radius: 4px;
+}
+
+input {
+  width: 100%;
+  min-height: 42px;
+  padding: 8px 10px;
+  border: 1px solid #aebbb8;
+  border-radius: 4px;
+}
+
+.field-error {
+  color: #9b332f;
+  font-size: 13px;
+}
+
+.field-error-msg {
+  color: #9b332f;
+  font-size: 11px;
+  margin-top: 2px;
+}
+
+.toggle {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 92px;
+  color: #354744;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.toggle input {
+  width: 18px;
+  min-height: 18px;
+  margin: 0;
+  accent-color: #246f65;
+}
+
+/* Global Buttons */
+button.primary,
+button.secondary,
+button.stop {
+  min-height: 42px;
+  padding: 9px 16px;
+  border-radius: 5px;
+  cursor: pointer;
+}
+
+button.primary {
+  border: 1px solid #1d5f57;
+  color: white;
+  background: #246f65;
+}
+
+button.primary:hover {
+  background: #1c5b53;
+}
+
+button.secondary {
+  border: 1px solid #b9c5c3;
+  color: #354744;
+  background: white;
+}
+
+button.stop {
+  border: 1px solid #ad4641;
+  color: #842e2a;
+  background: #fff;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.52;
+}
+
+.primary-subtle {
+  background: #eef6f4;
+  color: #1d6158;
+  border: 1px solid #7ea39c;
+  font-weight: 600;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.primary-subtle:hover:not(:disabled) {
+  background: #246f65;
+  color: white;
+}
+
+.delete-button {
+  border: 1px solid #d0aaa7;
+  color: #8c302d;
+  background: white;
+  border-radius: 5px;
+  cursor: pointer;
+}
+
+.danger-button {
+  flex: 0 0 auto;
+  border: 1px solid #9e3d38;
+  background: #9e3d38;
+  color: #fff;
+  border-radius: 5px;
+  padding: 10px 14px;
+  cursor: pointer;
+}
+
+.danger-button:hover:not(:disabled) {
+  background: #812f2b;
+}
+
+.danger-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+/* Global Badges, States & Banners */
+.state {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 10px;
+  color: #76560e;
+  background: #fff0c7;
+  border: 1px solid #e8d49d;
+  border-radius: 4px;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.state span {
+  font-size: 9px;
+}
+
+.state.running {
+  color: #176344;
+  background: #e4f4eb;
+  border-color: #b9ddca;
+}
+
+.state.danger {
+  color: #8c302d;
+  background: #fbe9e7;
+  border-color: #e7bfbb;
+}
+
+.banner {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 14px;
+  margin-top: 18px;
+  padding: 12px 14px;
+  border-left: 4px solid;
+  font-size: 13px;
+}
+
+.banner.error {
+  color: #742c29;
+  background: #fbeceb;
+  border-color: #bb4e49;
+}
+
+.banner.success {
+  color: #245d45;
+  background: #e8f4ed;
+  border-color: #3f8b67;
+}
+
+.banner button {
+  border: 0;
+  color: inherit;
+  background: transparent;
+  font-size: 20px;
+  cursor: pointer;
+}
+
+/* Accessibility & Preferences */
+@media (forced-colors: active) {
+  .route-letter,
+  .brand-mark {
+    border: 1px solid ButtonText;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    scroll-behavior: auto !important;
+  }
+}
